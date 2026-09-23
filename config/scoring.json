@@ -1,5 +1,6 @@
 {
   "max_points": 100.0,
+  "target_width_m": 2.0,
   "short_per_m": 5.0,
   "long_per_m": 2.0,
   "min_points": 0.0,

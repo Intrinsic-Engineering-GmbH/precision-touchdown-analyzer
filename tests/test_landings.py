@@ -403,6 +403,44 @@ def test_scoring_rules_deduct_short_and_long_differently(tmp_path: Path) -> None
     assert scoring.load(tmp_path / "missing") == scoring.ScoringRules()
 
 
+def test_target_line_has_a_width_that_earns_full_points(tmp_path: Path) -> None:
+    from touchdown_analyzer.store import scoring
+
+    # a 2 m wide line: everything within +/-1 m of its centre is a bullseye
+    rules = scoring.ScoringRules(
+        max_points=100, target_width_m=2.0, short_per_m=5, long_per_m=2, min_points=0
+    )
+    assert rules.target_half_width_m == 1.0
+    assert rules.score(0.0, "measured") == 100
+    assert rules.score(-1.0, "measured") == 100  # on the short edge of the line
+    assert rules.score(1.0, "measured") == 100  # on the long edge
+    # the deduction is measured from the edge, not the centre
+    assert rules.score(-4.0, "measured") == 85  # 5 pts/m over 3.0 m of miss
+    assert rules.score(4.0, "measured") == 94  # 2 pts/m over 3.0 m of miss
+    assert rules.miss_m(-1.0) == 0.0 and rules.miss_m(-4.0) == 3.0
+    assert rules.score(-30.0, "measured") == 0  # the floor still holds
+
+    # width 0 is the old infinitely thin line, unchanged
+    thin = scoring.ScoringRules(max_points=100, short_per_m=5, long_per_m=2, min_points=0)
+    assert thin.target_width_m == 0.0
+    assert thin.score(-4.0, "measured") == 80
+
+    scoring.save(tmp_path, rules)
+    assert scoring.load(tmp_path) == rules
+
+
+def test_scoring_config_without_a_width_still_loads(tmp_path: Path) -> None:
+    from touchdown_analyzer.store import scoring
+
+    # a scoring.json written before the width existed
+    (tmp_path / scoring.CONFIG_NAME).write_text(
+        '{"max_points": 100, "short_per_m": 5, "long_per_m": 2}', encoding="utf-8"
+    )
+    rules = scoring.load(tmp_path)
+    assert rules.target_width_m == 0.0
+    assert rules.score(-4.0, "measured") == 80
+
+
 def test_scores_come_with_the_landings_and_rules_can_be_changed(client: TestClient) -> None:
     body = client.get("/api/landings/2026-09-13/L0001").json()
     # -1.9 m short under the default rules: 100 - 5 * 1.9 = 90.5, rounded to 0 decimals
@@ -418,6 +456,14 @@ def test_scores_come_with_the_landings_and_rules_can_be_changed(client: TestClie
         client.get("/api/landings/2026-09-13/L0002").json()["score"] is None
     )  # rolling, not scored
     assert client.post("/api/scoring", json={"max_points": -1}).status_code == 422
+    assert client.post("/api/scoring", json={"target_width_m": -1}).status_code == 422
+    # a 4 m wide line puts L0001 (-1.9 m) inside it: full points
+    r = client.post(
+        "/api/scoring",
+        json={"max_points": 100, "target_width_m": 4.0, "short_per_m": 5, "long_per_m": 2},
+    )
+    assert r.status_code == 200 and r.json()["target_width_m"] == 4.0
+    assert client.get("/api/landings/2026-09-13/L0001").json()["score"] == 100
     assert client.get("/scoring").status_code == 200
 
 

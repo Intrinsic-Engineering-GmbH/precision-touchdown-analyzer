@@ -127,8 +127,11 @@ def wait_text(landing: dict[str, Any]) -> str:
 
 
 def rules_text(rules: ScoringRules) -> str:
+    line = f"{rules.max_points:g} pts on the line"
+    if rules.target_width_m > 0:
+        line += f" ({rules.target_width_m:g} m wide, +/-{rules.target_half_width_m:g} m)"
     return (
-        f"{rules.name or 'scoring'}: {rules.max_points:g} pts on the line, "
+        f"{rules.name or 'scoring'}: {line}, "
         f"-{rules.short_per_m:g}/m short, -{rules.long_per_m:g}/m long, "
         f"floor {rules.min_points:g}, outside the window {rules.out_of_range_points:g}"
     )

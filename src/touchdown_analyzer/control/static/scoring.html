@@ -82,6 +82,7 @@ tr.line td { font-weight:600; color:var(--amber); }
 #chart .grid { stroke:var(--line); stroke-width:1; stroke-dasharray:3 4; }
 #chart .curve { fill:none; stroke:var(--accent); stroke-width:2.5; }
 #chart .target { stroke:var(--amber); stroke-width:2; }
+#chart .band { fill:color-mix(in srgb,var(--amber) 18%,transparent); stroke:none; }
 #chart text { fill:var(--muted); font-size:11px; font-family:ui-monospace,Consolas,monospace; }
 #chart .pt { fill:var(--ok); }
 </style>
@@ -132,6 +133,7 @@ tr.line td { font-weight:600; color:var(--amber); }
     <div class="grid">
       <div class="wide"><label for="name">Name of the rule set</label><input id="name" autocomplete="off"></div>
       <div><label for="max">Points on the target line</label><input id="max" type="number" step="1" min="1"></div>
+      <div><label for="width">Width of the target line (m)</label><input id="width" type="number" step="0.1" min="0"></div>
       <div><label for="short">Deduction per metre <b>short</b> (pts/m)</label><input id="short" type="number" step="0.1" min="0"></div>
       <div><label for="long">Deduction per metre <b>long</b> (pts/m)</label><input id="long" type="number" step="0.1" min="0"></div>
       <div><label for="min">Minimum points for a measured landing</label><input id="min" type="number" step="1"></div>
@@ -145,7 +147,9 @@ tr.line td { font-weight:600; color:var(--amber); }
     </div>
     <div class="note" id="err" hidden></div>
     <p class="muted" style="margin-bottom:0">
-      Score = points on the line &minus; deduction &times; |offset|, never below the minimum. Short and long
+      Score = points on the line &minus; deduction &times; miss, never below the minimum, where the miss is
+      how far the wheel stopped short of the <i>edge</i> of the line: the line is painted with a width, and
+      touching down anywhere on it earns everything. A width of 0 makes the line infinitely thin. Short and long
       have their own deduction because a landing short of the line is usually punished harder than one
       beyond it. Take-offs, fly-throughs and rejected events earn nothing.
     </p>
@@ -193,18 +197,22 @@ const post = (path, body) => api(path, { method: "POST", headers: { "Content-Typ
 // The rule from the form, and the score it gives an offset.
 function formRules() {
   return {
-    name: $("name").value, max_points: Number($("max").value), short_per_m: Number($("short").value),
+    name: $("name").value, max_points: Number($("max").value), target_width_m: Number($("width").value),
+    short_per_m: Number($("short").value),
     long_per_m: Number($("long").value), min_points: Number($("min").value),
     out_of_range_points: Number($("oor").value), decimals: Number($("dec").value),
   };
 }
 function fillForm(r) {
-  $("name").value = r.name; $("max").value = r.max_points; $("short").value = r.short_per_m; $("long").value = r.long_per_m;
+  $("name").value = r.name; $("max").value = r.max_points; $("width").value = r.target_width_m;
+  $("short").value = r.short_per_m; $("long").value = r.long_per_m;
   $("min").value = r.min_points; $("oor").value = r.out_of_range_points; $("dec").value = String(r.decimals);
 }
+const halfWidth = r => Math.max(0, r.target_width_m || 0) / 2;
 function score(r, offset) {
   const rate = offset < 0 ? r.short_per_m : r.long_per_m;
-  return Math.max(r.min_points, r.max_points - rate * Math.abs(offset));
+  const miss = Math.max(0, Math.abs(offset) - halfWidth(r));
+  return Math.max(r.min_points, r.max_points - rate * miss);
 }
 const fmt = (r, v) => v.toFixed(r.decimals);
 const signed = m => (m >= 0 ? "+" : "−") + Math.abs(m).toFixed(1) + " m";
@@ -227,6 +235,8 @@ function renderScale() {
   const x = o => L + (o + 20) / 40 * (W - L - R);
   const y = p => T + (1 - p / r.max_points) * (H - T - B);
   let s = "";
+  const hw = Math.min(20, halfWidth(r));
+  if (hw > 0) s += `<rect class="band" x="${x(-hw)}" y="${T}" width="${x(hw) - x(-hw)}" height="${H - T - B}"/>`;
   for (const o of [-20, -10, 0, 10, 20]) s += `<line class="${o === 0 ? "target" : "grid"}" x1="${x(o)}" y1="${T}" x2="${x(o)}" y2="${H - B}"/><text x="${x(o)}" y="${H - 8}" text-anchor="middle">${o > 0 ? "+" : ""}${o} m</text>`;
   for (const f of [0, 0.5, 1]) { const p = f * r.max_points; s += `<line class="grid" x1="${L}" y1="${y(p)}" x2="${W - R}" y2="${y(p)}"/><text x="${L - 6}" y="${y(p) + 4}" text-anchor="end">${fmt(r, p)}</text>`; }
   s += `<line class="axis" x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}"/>`;

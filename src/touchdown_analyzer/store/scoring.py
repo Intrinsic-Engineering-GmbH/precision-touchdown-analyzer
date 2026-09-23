@@ -1,10 +1,12 @@
 """The points a landing earns from its offset. Stdlib only.
 
 The rules are the club's, not the software's: the full score on the target
-line, a deduction per metre short and a different one per metre long (a
-short landing is usually punished harder), a floor, and what a landing
-outside the measurement window gets. They live in ``config/scoring.json``
-and are edited from the Scoring page.
+line, the width of that line (it is painted, not infinitely thin, so there
+is a band around it that still earns everything), a deduction per metre
+short and a different one per metre long (a short landing is usually
+punished harder), a floor, and what a landing outside the measurement
+window gets. They live in ``config/scoring.json`` and are edited from the
+Scoring page.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ CONFIG_NAME = "scoring.json"
 @dataclass(slots=True)
 class ScoringRules:
     max_points: float = 100.0
+    target_width_m: float = 0.0  # full width of the line; max points within half of it
     short_per_m: float = 5.0  # points lost per metre before the line
     long_per_m: float = 2.0  # points lost per metre beyond the line
     min_points: float = 0.0  # the floor for a measured landing
@@ -32,6 +35,19 @@ class ScoringRules:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def target_half_width_m(self) -> float:
+        """How far either side of the line still earns everything."""
+        return max(0.0, self.target_width_m) / 2.0
+
+    def miss_m(self, longitudinal_m: float) -> float:
+        """Distance deducted for: the offset less the half width, never below 0.
+
+        Touching down anywhere on the painted line is a bullseye, so the
+        deduction is measured from the edge of the line, not its centre.
+        """
+        return max(0.0, abs(longitudinal_m) - self.target_half_width_m)
 
     def score(self, longitudinal_m: float | None, outcome: str) -> float | None:
         """Points for one landing, or ``None`` when it is not scored at all.
@@ -46,7 +62,7 @@ class ScoringRules:
         if outcome != "measured" or longitudinal_m is None:
             return None
         rate = self.short_per_m if longitudinal_m < 0 else self.long_per_m
-        points = self.max_points - rate * abs(longitudinal_m)
+        points = self.max_points - rate * self.miss_m(longitudinal_m)
         return round(max(self.min_points, points), self.decimals)
 
 

@@ -119,6 +119,7 @@ class EditRequest(BaseModel):
 
 class ScoringRequest(BaseModel):
     max_points: float = Field(default=100.0, gt=0)
+    target_width_m: float = Field(default=0.0, ge=0)
     short_per_m: float = Field(default=5.0, ge=0)
     long_per_m: float = Field(default=2.0, ge=0)
     min_points: float = 0.0
