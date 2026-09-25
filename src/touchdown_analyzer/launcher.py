@@ -29,25 +29,47 @@ from touchdown_analyzer import __version__, paths
 
 DEFAULT_PORT = int(os.environ.get("TOUCHDOWN_ANALYZER_PORT", "8080") or 8080)
 POLL_MS = 2000
+# The gliding badge of the web pages, rendered by packaging/make_icon.py --static.
+ICONS = Path(__file__).parent / "control" / "static"
 LOG_LINES = 400
+FOLDERS_NAME = "folders.json"  # in config/: where recordings and results go
 
 
-def server_command(host: str, port: int, root: Path) -> list[str]:
+def load_folders(home: Path) -> tuple[Path, Path]:
+    """The recordings (raw) and results folders: as saved, else under data/.
+
+    Relative paths are taken from the data home.
+    """
+    raw, results = home / "data" / "raw", home / "data" / "landings"
+    try:
+        saved = json.loads((home / "config" / FOLDERS_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return raw, results
+    if not isinstance(saved, dict):
+        return raw, results
+    if saved.get("raw"):
+        raw = home / str(saved["raw"])
+    if saved.get("results"):
+        results = home / str(saved["results"])
+    return raw, results
+
+
+def save_folders(home: Path, raw: Path, results: Path) -> Path:
+    path = home / "config" / FOLDERS_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"raw": str(raw), "results": str(results)}, indent=2) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def server_command(host: str, port: int, root: Path, results: Path) -> list[str]:
     """How to start the server as a child of this program."""
+    args = ["serve", "--host", host, "--port", str(port), "--root", str(root)]
+    args += ["--results", str(results)]
     if paths.frozen():
-        return [sys.executable, "serve", "--host", host, "--port", str(port), "--root", str(root)]
-    return [
-        sys.executable,
-        "-m",
-        "touchdown_analyzer",
-        "serve",
-        "--host",
-        host,
-        "--port",
-        str(port),
-        "--root",
-        str(root),
-    ]
+        return [sys.executable, *args]
+    return [sys.executable, "-m", "touchdown_analyzer", *args]
 
 
 def fetch(url: str, timeout: float = 1.5) -> dict[str, Any] | None:
@@ -84,7 +106,7 @@ class ServerProcess:
     def running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
-    def start(self, host: str, port: int) -> None:
+    def start(self, host: str, port: int, raw: Path, results: Path) -> None:
         if self.running:
             return
         self.host, self.port = host, port
@@ -93,7 +115,7 @@ class ServerProcess:
         env[paths.ENV_HOME] = str(self.home)
         creation = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.process = subprocess.Popen(  # noqa: S603 - our own program
-            server_command(host, port, self.home / "data" / "raw"),
+            server_command(host, port, raw, results),
             cwd=self.home,
             env=env,
             stdout=subprocess.PIPE,
@@ -140,13 +162,22 @@ def run() -> int:
     log_dir.mkdir(exist_ok=True)
     server = ServerProcess(home, log_dir / f"server-{datetime.now():%Y-%m-%d}.log")
 
+    if sys.platform == "win32" and not paths.frozen():
+        # Run through python.exe, the taskbar would show Python's icon;
+        # an own app id makes it take the window's.
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(paths.APP_NAME)
+
     root = tk.Tk()
     root.title(f"{paths.APP_TITLE} - control")
     root.minsize(640, 520)
+    logo_image: tk.PhotoImage | None = None  # a local of run(): lives as long as the window
     try:
-        icon = paths.program_dir() / "icon.png"
-        if icon.is_file():
-            root.iconphoto(True, tk.PhotoImage(file=str(icon)))
+        root.iconphoto(
+            True, *(tk.PhotoImage(file=str(ICONS / f"icon-{s}.png")) for s in (256, 48, 32, 16))
+        )
+        logo_image = tk.PhotoImage(file=str(ICONS / "icon-36.png"))
     except tk.TclError:
         pass
 
@@ -163,9 +194,13 @@ def run() -> int:
     outer = ttk.Frame(root, padding=14)
     outer.pack(fill="both", expand=True)
 
-    ttk.Label(outer, text=paths.APP_TITLE, style="Title.TLabel").grid(row=0, column=0, sticky="w")
-    ttk.Label(outer, text=f"v{__version__} · {home}", style="Muted.TLabel").grid(
-        row=1, column=0, sticky="w", pady=(0, 10)
+    header = ttk.Frame(outer)
+    header.grid(row=0, column=0, rowspan=2, sticky="w", pady=(0, 10))
+    if logo_image is not None:
+        ttk.Label(header, image=logo_image).grid(row=0, column=0, rowspan=2, padx=(0, 10))
+    ttk.Label(header, text=paths.APP_TITLE, style="Title.TLabel").grid(row=0, column=1, sticky="w")
+    ttk.Label(header, text=f"v{__version__} · {home}", style="Muted.TLabel").grid(
+        row=1, column=1, sticky="w"
     )
 
     # -- server ---------------------------------------------------------------
@@ -192,6 +227,42 @@ def run() -> int:
     stop_btn.pack(side="left", padx=6)
     open_btn.pack(side="left")
 
+    # -- folders ------------------------------------------------------------------
+    # Where the recordings and the results go. Read when the server starts,
+    # so they are locked while it runs.
+    from tkinter import filedialog
+
+    raw_dir, results_dir = load_folders(home)
+    fb = ttk.LabelFrame(outer, text="Folders", padding=10)
+    fb.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+    fb.columnconfigure(1, weight=1)
+    folder_vars: dict[str, tk.StringVar] = {}
+    folder_widgets: list[ttk.Entry | ttk.Button] = []
+    for i, (key, title, initial) in enumerate(
+        (("raw", "Recordings (raw)", raw_dir), ("results", "Results", results_dir))
+    ):
+        ttk.Label(fb, text=title, width=16).grid(row=i, column=0, sticky="w", pady=1)
+        var = tk.StringVar(value=str(initial))
+        entry = ttk.Entry(fb, textvariable=var)
+        entry.grid(row=i, column=1, sticky="ew", padx=(0, 6), pady=1)
+
+        def browse(var: tk.StringVar = var, title: str = title) -> None:
+            chosen = filedialog.askdirectory(
+                parent=root, initialdir=var.get(), mustexist=False, title=title
+            )
+            if chosen:
+                var.set(str(Path(chosen)))
+
+        button = ttk.Button(fb, text="Browse…", command=browse)
+        button.grid(row=i, column=2, pady=1)
+        folder_vars[key] = var
+        folder_widgets += [entry, button]
+    ttk.Label(
+        fb,
+        text="Raw video is large - choose a disk with room for it. Used when the server starts.",
+        style="Muted.TLabel",
+    ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
     # -- airfield ---------------------------------------------------------------
     # Which field the OGN logbook and live feed are read for. The ICAO code
     # is enough: "Look up" asks the OGN FlightBook for the rest.
@@ -199,7 +270,7 @@ def run() -> int:
 
     field = ogn.load_field(home / "config")
     af = ttk.LabelFrame(outer, text="Airfield (OGN identification)", padding=10)
-    af.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+    af.grid(row=4, column=0, sticky="ew", pady=(10, 0))
     line1 = ttk.Frame(af)
     line1.pack(fill="x")
     ttk.Label(line1, text="ICAO").pack(side="left")
@@ -233,7 +304,7 @@ def run() -> int:
 
     # -- services -------------------------------------------------------------
     svc = ttk.LabelFrame(outer, text="Services", padding=10)
-    svc.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+    svc.grid(row=5, column=0, sticky="ew", pady=(10, 0))
     svc.columnconfigure(1, weight=1)
     rows: dict[str, tuple[ttk.Label, ttk.Label]] = {}
     for i, (key, title) in enumerate(
@@ -254,8 +325,8 @@ def run() -> int:
 
     # -- log --------------------------------------------------------------------
     logbox = ttk.LabelFrame(outer, text="Server log", padding=6)
-    logbox.grid(row=5, column=0, sticky="nsew", pady=(10, 0))
-    outer.rowconfigure(5, weight=1)
+    logbox.grid(row=6, column=0, sticky="nsew", pady=(10, 0))
+    outer.rowconfigure(6, weight=1)
     outer.columnconfigure(0, weight=1)
     text = tk.Text(logbox, height=12, wrap="none", font=("Consolas", 9), state="disabled")
     scroll = ttk.Scrollbar(logbox, command=text.yview)
@@ -294,6 +365,24 @@ def run() -> int:
         stop_btn.configure(state="normal" if running else "disabled")
         open_btn.configure(state="normal" if running else "disabled")
         url_label.configure(text=server.url if running else "")
+        for widget in folder_widgets:
+            widget.configure(state="disabled" if running else "normal")
+
+    def read_folders() -> tuple[Path, Path] | None:
+        chosen = []
+        for key, title in (("raw", "recordings"), ("results", "results")):
+            text = folder_vars[key].get().strip()
+            if not text:
+                log(f"[choose a {title} folder first]")
+                return None
+            folder = home / Path(text).expanduser()
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                log(f"[cannot use {folder} for the {title}: {exc}]")
+                return None
+            chosen.append(folder)
+        return chosen[0], chosen[1]
 
     def start() -> None:
         try:
@@ -302,9 +391,17 @@ def run() -> int:
             log("[port must be a number]")
             return
         host = "0.0.0.0" if lan_var.get() else "127.0.0.1"  # noqa: S104 - the user asked
-        log(f"[starting server on {host}:{port}, data in {home}]")
+        folders = read_folders()
+        if folders is None:
+            return
+        raw, results = folders
         try:
-            server.start(host, port)
+            save_folders(home, raw, results)
+        except OSError as exc:
+            log(f"[could not save the folders: {exc}]")
+        log(f"[starting server on {host}:{port}, recordings in {raw}, results in {results}]")
+        try:
+            server.start(host, port, raw, results)
         except OSError as exc:
             log(f"[could not start: {exc}]")
             return

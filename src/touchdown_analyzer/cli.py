@@ -124,6 +124,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Start, stop and monitor recordings from a browser.",
     )
     web.add_argument("--root", type=Path, default=DEFAULT_ROOT)
+    web.add_argument(
+        "--results",
+        type=Path,
+        help="where landings.json, clips and overlays go (default: <root>/../landings)",
+    )
     web.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to allow other devices")
     web.add_argument("--port", type=int, default=DEFAULT_PORT)
     web.set_defaults(func=cmd_serve)
@@ -398,7 +403,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print("only do this on a network you trust.")
     print("Press Ctrl+C to stop.\n")
 
-    serve(args.root, args.host, args.port, ffmpeg=args.ffmpeg, ffprobe=args.ffprobe)
+    serve(
+        args.root,
+        args.host,
+        args.port,
+        ffmpeg=args.ffmpeg,
+        ffprobe=args.ffprobe,
+        results=args.results,
+    )
     return EXIT_OK
 
 

@@ -20,10 +20,11 @@ in the browser.
 
 **Windows** - run `PTA-Setup-<version>.exe`. It installs for all users to
 `C:\Program Files\PTA`, adds Start menu and desktop shortcuts and an entry in *Apps &
-features*. The setup asks for a **data folder** - recordings, results and the
-configuration; default `C:\Users\<you>\PTA`, put it on the disk with room for
-video - which the uninstaller leaves alone. A folder under your own profile
-installs per user, without the prompt. Unattended:
+features*. The configuration lives in `C:\Users\<you>\PTA`, which the
+uninstaller leaves alone. The **Recordings** and **Results** folders are chosen
+in the control window that opens first (default `data\raw` and `data\landings`
+there) - put the recordings on the disk with room for video. A program folder
+under your own profile installs per user, without the prompt. Unattended:
 `PTA-Setup-<version>.exe /S [/D=C:\path] [/DATA=D:\path] [/NODESKTOP] [/NOMENU]`.
 
 **Debian / Ubuntu** (amd64, Python 3.12 or 3.13):

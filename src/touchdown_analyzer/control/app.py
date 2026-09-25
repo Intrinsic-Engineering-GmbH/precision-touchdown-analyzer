@@ -468,9 +468,11 @@ def serve(
     *,
     ffmpeg: str | None = None,
     ffprobe: str | None = None,
+    results: Path | None = None,
 ) -> None:
     """Run the control UI until interrupted."""
     import uvicorn
 
     service = CaptureService(root, ffmpeg=ffmpeg, ffprobe=ffprobe)
-    uvicorn.run(create_app(service), host=host, port=port, log_level="warning")
+    review = ReviewService(service, out_root=results)
+    uvicorn.run(create_app(service, review), host=host, port=port, log_level="warning")

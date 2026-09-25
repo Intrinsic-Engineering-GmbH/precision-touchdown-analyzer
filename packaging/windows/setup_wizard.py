@@ -6,7 +6,8 @@ by default - the wizard runs without privileges and asks for
 administrator rights (the UAC prompt) only when *Install* is pressed and
 the chosen folder needs them; it then runs a second, elevated copy of
 itself in silent mode and waits for it. A folder under the user's
-profile installs without the prompt, per user.
+profile installs without the prompt, per user. Where the recordings and
+results go is chosen in the control window, not here.
 
     PTA-Setup.exe                     the wizard
     PTA-Setup.exe /S                  silent, defaults (asks for elevation)
@@ -140,7 +141,8 @@ def wizard() -> int:
         frame,
         text="Video-based landing measurement for glider spot-landing competitions.\n"
         "Installing under Program Files makes the program available to every user of this "
-        "computer; Windows will ask for administrator rights when you press Install.",
+        "computer; Windows will ask for administrator rights when you press Install. "
+        "The folders for recordings and results are chosen in the control window.",
         wraplength=500,
         justify="left",
     ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 14))
@@ -167,13 +169,6 @@ def wizard() -> int:
         return var
 
     dest_var = folder_row(2, "Program folder", winstall.default_install_dir(), "")
-    data_var = folder_row(
-        4,
-        "Data folder",
-        winstall.default_data_dir(),
-        "Recordings, results and the configuration. Raw video is large - "
-        "choose a disk with room for it. The uninstaller leaves this folder alone.",
-    )
 
     desktop_var = tk.BooleanVar(value=True)
     menu_var = tk.BooleanVar(value=True)
@@ -224,14 +219,13 @@ def wizard() -> int:
     def run_install() -> None:
         options = Options(
             Path(dest_var.get().strip()),
-            Path(data_var.get().strip()),
+            winstall.default_data_dir(),
             desktop=desktop_var.get(),
             start_menu=menu_var.get(),
         )
-        for label, folder in (("program", options.install_dir), ("data", options.data_dir)):
-            if not folder.is_absolute():
-                messagebox.showerror(paths.APP_TITLE, f"The {label} folder must be a full path.")
-                return
+        if not options.install_dir.is_absolute():
+            messagebox.showerror(paths.APP_TITLE, "The program folder must be a full path.")
+            return
         install_btn.configure(state="disabled")
         cancel_btn.configure(state="disabled")
         elevate = needs_elevation(options)

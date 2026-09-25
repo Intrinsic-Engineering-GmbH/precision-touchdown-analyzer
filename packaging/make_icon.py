@@ -5,6 +5,10 @@ gulls), rasterised with OpenCV so the build needs no extra tool. The .ico
 holds PNG-compressed images, which Windows accepts since Vista.
 
     python packaging/make_icon.py packaging/out
+    python packaging/make_icon.py --static    the PNGs the control window uses
+
+The --static ones are committed (src/touchdown_analyzer/control/static/),
+so a checkout shows the badge without building anything first.
 """
 
 from __future__ import annotations
@@ -84,6 +88,16 @@ def write_ico(path: Path, images: list[np.ndarray]) -> None:
     path.write_bytes(header + entries + b"".join(blobs))
 
 
+STATIC = Path(__file__).resolve().parents[1] / "src" / "touchdown_analyzer" / "control" / "static"
+STATIC_SIZES = (16, 32, 36, 48, 256)  # window icon sizes, and 36 for the header as on the pages
+
+
+def write_static(static_dir: Path = STATIC) -> None:
+    for size in STATIC_SIZES:
+        cv2.imwrite(str(static_dir / f"icon-{size}.png"), render(size))
+    print("icon-*.png written to", static_dir)
+
+
 def main(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_dir / "icon.png"), render(256))
@@ -92,4 +106,7 @@ def main(out_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1] if len(sys.argv) > 1 else "packaging/out"))
+    if sys.argv[1:] == ["--static"]:
+        write_static()
+    else:
+        main(Path(sys.argv[1] if len(sys.argv) > 1 else "packaging/out"))

@@ -41,6 +41,24 @@ def test_serve_defaults_avoid_the_reserved_port() -> None:
     args = build_parser().parse_args(["serve"])
     assert args.port != 8000
     assert args.host == "127.0.0.1"
+    assert args.results is None  # beside the root, as the analyse command does
+
+
+def test_launcher_folders_default_under_data_and_round_trip(tmp_path) -> None:
+    from touchdown_analyzer import launcher
+
+    assert launcher.load_folders(tmp_path) == (
+        tmp_path / "data" / "raw",
+        tmp_path / "data" / "landings",
+    )
+    raw, results = tmp_path / "D" / "video", tmp_path / "E" / "results"
+    launcher.save_folders(tmp_path, raw, results)
+    assert launcher.load_folders(tmp_path) == (raw, results)
+    command = launcher.server_command("127.0.0.1", 8080, raw, results)
+    assert command[command.index("--root") + 1] == str(raw)
+    assert command[command.index("--results") + 1] == str(results)
+    args = build_parser().parse_args(command[command.index("serve") :])
+    assert (args.root, args.results) == (raw, results)
 
 
 def test_bind_problem_detects_a_taken_port() -> None:

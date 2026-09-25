@@ -75,6 +75,7 @@ footer .corner { margin-left:auto; display:flex; gap:.6em; opacity:0; transition
 body.awake footer .corner { opacity:1; }
 footer .corner a, footer .corner button { font:inherit; color:var(--muted); background:transparent; border:1px solid var(--line);
        border-radius:.5em; padding:.3em .8em; cursor:pointer; text-decoration:none; }
+footer .corner .theme { line-height:1; }
 body.asleep { cursor:none; }
 [hidden] { display:none !important; }
 </style>
@@ -143,10 +144,9 @@ body.asleep { cursor:none; }
     <span><b>Offset</b> from the target line, − short · + long</span>
   </div>
   <div class="corner">
-    <a href="/landings">judge</a>
     <a id="xlsxLink" href="#" hidden>excel</a>
     <a id="pdfLink" href="#" hidden>pdf</a>
-    <button type="button" id="themeBtn">light / dark</button>
+    <button type="button" id="themeBtn" class="theme" aria-label="switch light / dark">☾</button>
     <button type="button" id="fullBtn">full screen</button>
   </div>
 </footer>
@@ -308,10 +308,18 @@ function wake() {
 }
 document.addEventListener("mousemove", wake);
 document.addEventListener("keydown", wake);
+// the same sun / moon as the other pages
+function paintTheme() {
+  const dark = document.documentElement.dataset.theme === "dark";
+  $("themeBtn").textContent = dark ? "☀" : "☾";
+  $("themeBtn").title = dark ? "Switch to the white design" : "Switch to the black design";
+}
+paintTheme();
 $("themeBtn").addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem("tda.board.theme", next); } catch (e) {}
+  paintTheme();
 });
 $("fullBtn").addEventListener("click", () => {
   if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});

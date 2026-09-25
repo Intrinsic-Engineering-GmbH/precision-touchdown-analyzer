@@ -33,7 +33,7 @@ analysis = ["opencv-python-headless>=4.12,<5"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-touchdown_analyzer = ["control/static/*.html"]
+touchdown_analyzer = ["control/static/*.html", "control/static/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
