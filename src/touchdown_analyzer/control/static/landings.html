@@ -27,23 +27,24 @@ body { margin:0; background:var(--bg); color:var(--ink);
 a { color:var(--accent); }
 
 /* brand bar: the product, the programs, the live dot */
-header.brand { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin:0 0 18px;
-               padding:12px 18px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
+header.brand { display:flex; align-items:center; gap:14px; flex-wrap:nowrap; margin:0 0 18px;
+               padding:10px 14px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
                border:1px solid var(--bar-line); }
-.brand .mark { display:flex; align-items:center; gap:12px; }
-.brand .name { font-size:16px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; line-height:1.15; }
+.brand .mark { display:flex; align-items:center; gap:10px; min-width:0; }
+.brand .mark svg { width:32px; height:32px; flex:none; }
+.brand .name { font-size:14px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; line-height:1.15; }
 .brand .ver { font-size:11px; font-weight:500; letter-spacing:.02em; text-transform:none; color:var(--bar-muted); margin-left:8px; }
-.brand .apps { display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
+.brand .apps { flex:none; display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
                border:1px solid var(--bar-line); margin-left:auto; }
-.brand .apps a { display:inline-block; padding:7px 16px; border-radius:7px; font-size:13px; font-weight:600;
+.brand .apps a { display:inline-block; white-space:nowrap; padding:6px 11px; border-radius:7px; font-size:12.5px; font-weight:600;
                  letter-spacing:.03em; color:var(--bar-muted); text-decoration:none; }
 .brand .apps a:hover { color:var(--bar-hover-ink); background:var(--bar-hover); }
 .brand .apps a.on { color:#1a1200; background:#f0b429; }
-.brand .theme { font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
+.brand .theme { flex:none; font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
                 background:var(--bar-well); color:var(--bar-ink); border:1px solid var(--bar-line); }
 .brand .theme:hover { background:var(--bar-hover); color:var(--bar-hover-ink); }
-.brand .dot { margin-left:0; color:var(--bar-muted); }
-@media (max-width: 900px) { .brand .apps { margin-left:0; } }
+.brand .dot { flex:none; white-space:nowrap; margin-left:0; color:var(--bar-muted); }
+@media (max-width: 760px) { header.brand { flex-wrap:wrap; } .brand .apps { margin-left:0; } }
 
 /* the page's own controls */
 .toolbar { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:14px; padding:0 4px; }
@@ -66,7 +67,7 @@ button:disabled { opacity:.4; cursor:not-allowed; }
 .dot.down i { background:var(--fail); }
 @keyframes pulse { 50% { opacity:.25; } }
 
-.cols { display:grid; grid-template-columns:minmax(0,3fr) minmax(320px,2fr); gap:16px; }
+.cols { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:16px; align-items:start; }
 @media (max-width: 980px) { .cols { grid-template-columns:1fr; } }
 .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
 .panel > h2 { font-size:12px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:0 0 12px;
@@ -76,10 +77,11 @@ button:disabled { opacity:.4; cursor:not-allowed; }
 #stage { position:relative; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:16/9; }
 #shot { width:100%; height:100%; display:block; object-fit:contain; }
 #svg { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-/* the magnifier, as in the frame viewer */
-#lens { position:absolute; width:190px; height:190px; border-radius:50%; border:2px solid var(--amber);
+/* the magnifier, as in the frame viewer; fixed to the window so it can float
+   above the stage's edge and over the rest of the page */
+#lens { position:fixed; width:190px; height:190px; border-radius:50%; border:2px solid var(--amber);
         box-shadow:0 3px 14px rgba(0,0,0,.45); background-repeat:no-repeat; pointer-events:none;
-        display:none; z-index:5; background-color:#000; }
+        display:none; z-index:1000; background-color:#000; }
 #lens.on { display:block; }
 #lens::after { content:""; position:absolute; inset:0; border-radius:50%;
   background:linear-gradient(var(--amber),var(--amber)) 50% 50%/1px 100% no-repeat,
@@ -131,6 +133,12 @@ label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
 .flags li::before { content:"\25B2 "; font-size:10px; }
 .ogn { font-size:13px; margin-top:8px; padding:8px 10px; border-radius:7px; background:var(--bg); border:1px solid var(--line); }
 .ogn b { color:var(--accent); }
+.ogn .cands { margin-top:6px; display:grid; gap:4px; }
+.ogn .cand { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:4px 6px; border-radius:6px; border:1px solid transparent; }
+.ogn .cand.on { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 10%,transparent); }
+.ogn .cand .what { flex:1; min-width:0; }
+.ogn .cand .sub { color:var(--muted); }
+.ogn button { padding:3px 10px; font-size:12.5px; }
 
 table { width:100%; border-collapse:collapse; font-size:14px; }
 th, td { text-align:left; padding:8px 8px 8px 0; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -165,7 +173,6 @@ tbody tr:hover td { background:color-mix(in srgb,var(--accent) 6%,transparent); 
 .note.ok { background:color-mix(in srgb,var(--ok) 12%,transparent); color:var(--ok); border-color:color-mix(in srgb,var(--ok) 30%,transparent); }
 .note.warn { background:color-mix(in srgb,var(--warn) 12%,transparent); color:var(--warn); border-color:color-mix(in srgb,var(--warn) 30%,transparent); }
 [hidden] { display:none !important; }
-video { width:100%; border-radius:8px; background:#000; margin-top:12px; }
 </style>
 <script>
 // The theme is the user's choice, kept in this browser; the OS preference
@@ -220,14 +227,11 @@ video { width:100%; border-radius:8px; background:#000; margin-top:12px; }
 
 <div class="note" id="err" hidden></div>
 
-<div class="cols">
-<div>
   <section class="panel">
     <h2>Touchdown <span class="mono" id="tdWhen"></span></h2>
     <div id="stage">
       <img id="shot" alt="contact frame">
       <svg id="svg" viewBox="0 0 1920 1080"></svg>
-      <div id="lens"></div>
     </div>
     <input type="range" id="scrub" min="0" max="0" value="0" disabled>
     <div class="scrubrow">
@@ -236,14 +240,21 @@ video { width:100%; border-radius:8px; background:#000; margin-top:12px; }
       <button class="amber" id="toAuto" title="The frame where the estimator put the touchdown">automatic touchpoint</button>
       <button class="ghost" id="toContact">overlay</button>
       <button class="ghost" id="loop" title="Play the whole pass, over and over">&#9654; loop</button>
-      <button class="ghost active" id="lensBtn" title="Magnifier while hovering over the picture">&#128269; lens</button>
+      <button class="ghost active" id="lensBtn" title="Magnifier: follows the wheel, or the pointer while it is over the picture">&#128269; lens</button>
       <select id="loopFps" style="width:auto" title="playback rate">
         <option value="6">6 fps</option><option value="12" selected>12 fps</option><option value="20">20 fps</option><option value="30">30 fps</option>
       </select>
       <span class="muted keys"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> step &nbsp;<kbd>Shift</kbd> &times;10</span>
     </div>
     <div class="frameinfo" id="scrubInfo"><span class="hint">Select a landing.</span></div>
+  </section>
 
+<div id="lens"></div>
+
+<div class="cols">
+<div>
+  <section class="panel">
+    <h2>Result</h2>
     <div class="tiles">
       <div class="tile big" id="tLonTile"><b id="tLon">&mdash;</b><span>longitudinal</span></div>
       <div class="tile big ok" id="tScoreTile"><b id="tScore">&mdash;</b><span>points</span></div>
@@ -260,7 +271,7 @@ video { width:100%; border-radius:8px; background:#000; margin-top:12px; }
       <div class="ogn" id="ogn" hidden></div>
       <div class="grid">
         <div><label for="reg">Registration</label><input id="reg" placeholder="HB-3213" autocomplete="off" spellcheck="false"></div>
-        <div><label for="pilot">Pilot <span class="muted" id="pilotHint"></span></label>
+        <div><label for="pilot">Pilot</label>
           <input id="pilot" placeholder="Anna Muster" autocomplete="off" list="pilots"><datalist id="pilots"></datalist></div>
         <div><label for="outcome">What happened</label>
           <select id="outcome">
@@ -284,21 +295,7 @@ video { width:100%; border-radius:8px; background:#000; margin-top:12px; }
         <span class="muted" id="cardHint"></span>
       </div>
     </div>
-
-    <video id="clip" controls preload="none" hidden></video>
   </section>
-</div>
-
-<div>
-  <section class="panel">
-    <h2>Events &mdash; this session <span class="mono" id="counts"></span></h2>
-    <table>
-      <thead><tr><th>Time</th><th class="num">Offset</th><th>Aircraft</th><th></th></tr></thead>
-      <tbody id="rows"><tr><td colspan="4" class="muted">No results yet. Start the analysis below.</td></tr></tbody>
-    </table>
-  </section>
-</div>
-</div>
 
 <section class="panel">
   <h2>Analysis worker <span class="muted" id="workerHint"></span></h2>
@@ -320,6 +317,18 @@ video { width:100%; border-radius:8px; background:#000; margin-top:12px; }
   </div>
   <div class="note warn" id="workerErr" hidden></div>
 </section>
+</div>
+
+<div>
+<section class="panel">
+  <h2>Events &mdash; this session <span class="mono" id="counts"></span></h2>
+  <table>
+    <thead><tr><th>Time</th><th class="num">Offset</th><th>Aircraft</th><th></th></tr></thead>
+    <tbody id="rows"><tr><td colspan="4" class="muted">No results yet. Press Analyse session.</td></tr></tbody>
+  </table>
+</section>
+</div>
+</div>
 
 </div>
 <script>
@@ -327,10 +336,20 @@ const $ = id => document.getElementById(id);
 let session = "";
 let list = [];
 let current = null;      // the selected landing (full record)
-let frameIndex = null;   // frame currently shown (segment-local)
+let frameIndex = null;   // position on the frame bar (an index into timeline)
+let timeline = [];       // every frame the bar reaches: {segment, frame}, in time order
 let windowState = null;  // last /api/viewer/window response
 let showingOverlay = true;
 let busy = false;
+// Inputs the judge has changed and not saved yet. The list refreshes every
+// few seconds; those refreshes must not throw away what is being typed.
+const FORM = { reg: "registration", pilot: "pilot", outcome: "outcome", note: "note" };
+const dirty = new Set();
+for (const id of Object.keys(FORM)) {
+  $(id).addEventListener("input", () => { dirty.add(id); if (id === "reg") markCandidate(); });
+  $(id).addEventListener("change", () => dirty.add(id));
+}
+function setField(id, value) { if (!dirty.has(id)) $(id).value = value; }
 
 function escapeHtml(t) { const d = document.createElement("div"); d.textContent = t ?? ""; return d.innerHTML; }
 function showError(m) { $("err").hidden = !m; $("err").textContent = m || ""; }
@@ -414,15 +433,14 @@ function renderList() {
 function fillPilot(x) {
   const names = [...new Set(list.map(l => l.pilot).filter(Boolean))].sort();
   $("pilots").innerHTML = names.map(n => `<option value="${escapeHtml(n)}">`).join("");
-  let hint = "";
   let value = x.pilot || "";
   if (!value && x.registration) {
     const before = list.filter(l => l.id !== x.id && l.pilot && l.registration === x.registration)
       .sort((a, b) => (b.touchdown_utc || b.first_utc || "").localeCompare(a.touchdown_utc || a.first_utc || ""))[0];
-    if (before) { value = before.pilot; hint = `(as for ${x.registration} before - change if someone else flew)`; }
+    if (before) value = before.pilot;
   }
+  if (dirty.has("pilot")) return;
   $("pilot").value = value;
-  $("pilotHint").textContent = hint;
 }
 
 function badge(x) {
@@ -438,9 +456,11 @@ function badge(x) {
 async function select(id) {
   try { current = await api(`/api/landings/${encodeURIComponent(session)}/${encodeURIComponent(id)}`); }
   catch (e) { showError(e.message); return; }
+  dirty.clear();
   showError("");
   renderList();
   renderCard();
+  await loadTimeline();
   showOverlay();
 }
 
@@ -450,6 +470,9 @@ function renderCard() {
   const lon = x.scored_longitudinal_m;
   $("tLon").textContent = x.outcome === "measured" && lon != null ? (lon >= 0 ? "+" : "−") + Math.abs(lon).toFixed(1) + " m" : x.label;
   $("tLonTile").className = "tile big" + (x.outcome === "measured" ? " ok" : (x.outcome === "short" || x.outcome === "long" ? " warn" : ""));
+  // the points under the current rules, as the ranking counts them
+  $("tScore").textContent = x.score != null ? x.score : "—";
+  $("tScoreTile").className = "tile big" + (x.score == null ? "" : x.outcome === "measured" ? " ok" : " warn");
   $("tUnc").textContent = x.uncertainty_m ? "± " + x.uncertainty_m.toFixed(2) + " m" : "—";
   $("tLat").textContent = x.lateral_m != null ? x.lateral_m.toFixed(1) + " m" : "—";
   $("tSpeed").textContent = x.speed_mps ? (x.speed_mps * 3.6).toFixed(0) + " km/h" : "—";
@@ -462,12 +485,13 @@ function renderCard() {
   card.className = "card " + x.status;
   $("cardTitle").textContent = x.status === "confirmed" ? "Confirmed" + (x.confirmed_utc ? " · " + clock(x.confirmed_utc) : "")
     : x.status === "rejected" ? "Rejected" : "Awaiting confirmation";
-  $("reg").value = x.registration || "";
+  setField("reg", x.registration || "");
   fillPilot(x);
-  $("outcome").value = x.outcome === "unknown" ? "on_ground" : x.outcome;
+  setField("outcome", x.outcome === "unknown" ? "on_ground" : x.outcome);
   $("confirm").disabled = x.outcome === "unseen";
-  $("confirm").title = x.outcome === "unseen" ? "Scrub to the contact frame and press Use this frame first" : "";
-  $("note").value = x.note || "";
+  $("confirm").title = x.outcome === "unseen"
+    ? "Scrub to the contact frame, click the wheel if it is not marked, and press Use this frame first" : "";
+  setField("note", x.note || "");
   const done = x.status !== "pending";
   $("confirm").hidden = done; $("reject").hidden = done; $("reopen").hidden = !done;
   $("useFrame").disabled = done;
@@ -477,28 +501,91 @@ function renderCard() {
       (x.longitudinal_m != null ? ` = ${x.longitudinal_m >= 0 ? "+" : "−"}${Math.abs(x.longitudinal_m).toFixed(1)} m` : "")
     : "";
 
+  renderOgn(x);
+}
+
+// The frame bar spans the window the clip is cut to, across segment
+// boundaries, so it holds the whole pass and starts and ends with the clip.
+// Without a segment index it falls back to the tracked frames.
+const contactSeg = () => current.segment || (current.track[0] && current.track[0].segment);
+const posOf = (segment, frame) => timeline.findIndex(e => e.segment === segment && e.frame === frame);
+
+async function loadTimeline() {
+  timeline = [];
+  pendingPos = null;
+  try {
+    const spans = await api(`/api/landings/${encodeURIComponent(session)}/${encodeURIComponent(current.id)}/timeline`);
+    for (const s of spans) for (let f = s.first; f <= s.last; f++) timeline.push({ segment: s.segment, frame: f });
+  } catch (e) { /* fall back below */ }
+  if (!timeline.length) {
+    const frames = current.track.filter(p => p.segment === contactSeg()).map(p => p.frame);
+    if (frames.length) {
+      for (let f = Math.min(...frames); f <= Math.max(...frames); f++) timeline.push({ segment: contactSeg(), frame: f });
+    }
+  }
+  $("scrub").min = 0;
+  $("scrub").max = Math.max(0, timeline.length - 1);
+  $("scrub").disabled = timeline.length < 2;
+}
+
+// OGN's best guess and every other aircraft that fitted the instant. The
+// judge picks one with Use, or types the registration under Own entry.
+function renderOgn(x) {
   const o = x.ogn;
   $("ogn").hidden = !o;
-  if (o) {
-    $("ogn").innerHTML = `OGN ${escapeHtml(o.source)}: <b>${escapeHtml(o.registration || o.flarm_id || "?")}</b>` +
-      (o.competition_number ? " · " + escapeHtml(o.competition_number) : "") +
-      (o.aircraft_type ? " · " + escapeHtml(o.aircraft_type) : "") +
-      ` · p ${o.probability.toFixed(2)} · Δt ${o.dt_s.toFixed(0)} s` +
-      (o.distance_m != null ? ` · ${o.distance_m.toFixed(0)} m from the line` : "") +
-      (o.candidates > 1 ? ` · ${o.candidates} candidates` : "");
+  if (!o) return;
+  const options = o.options && o.options.length ? o.options : [o];
+  const head = `OGN ${escapeHtml(o.source)} · p ${o.probability.toFixed(2)}` +
+    (options.length > 1 ? ` · ${options.length} candidates - pick the right one` : "");
+  const rows = options.map((c, i) => {
+    const name = c.registration || c.flarm_id || "?";
+    const sub = [
+      c.competition_number, c.aircraft_type,
+      c.event && c.event !== "fix" ? c.event : "",
+      `Δt ${c.dt_s >= 0 ? "+" : "−"}${Math.abs(c.dt_s).toFixed(0)} s`,
+      c.distance_m != null ? `${c.distance_m.toFixed(0)} m from the line` : "",
+    ].filter(Boolean).map(escapeHtml).join(" · ");
+    return `<div class="cand" data-reg="${escapeHtml((c.registration || "").toUpperCase())}">
+      <span class="what"><b class="mono">${escapeHtml(name)}</b> <span class="sub">${sub}</span></span>
+      <button class="ghost" data-cand="${i}"${c.registration ? "" : ' disabled title="OGN knows no registration for this FLARM id"'}>Use</button></div>`;
+  }).join("");
+  $("ogn").innerHTML = `${head}<div class="cands">${rows}
+    <div class="cand" id="ownCand"><span class="what muted">None of these - type the registration yourself</span>
+      <button class="ghost" id="ownEntry">Own entry</button></div></div>`;
+  for (const button of $("ogn").querySelectorAll("button[data-cand]")) {
+    button.addEventListener("click", () => useCandidate(options[Number(button.dataset.cand)]));
   }
+  $("ownEntry").addEventListener("click", () => {
+    $("reg").value = "";
+    dirty.add("reg");
+    markCandidate();
+    $("reg").focus();
+  });
+  markCandidate();
+}
 
-  const clip = $("clip");
-  if (x.clip_path) { clip.hidden = false; clip.src = `/api/landings/${encodeURIComponent(session)}/${x.id}/clip.mp4?t=${Date.now()}`; }
-  else { clip.hidden = true; clip.removeAttribute("src"); }
+// Highlight the candidate the registration field currently names.
+function markCandidate() {
+  const reg = $("reg").value.trim().toUpperCase();
+  let any = false;
+  for (const row of $("ogn").querySelectorAll(".cand[data-reg]")) {
+    const on = !!reg && row.dataset.reg === reg;
+    row.classList.toggle("on", on);
+    any = any || on;
+  }
+  const own = $("ownCand");
+  if (own) own.classList.toggle("on", !any && (!!reg || dirty.has("reg")));
+}
 
-  // the scrubber spans the frames of the track in the contact segment
-  const seg = x.segment || (x.track[0] && x.track[0].segment);
-  const frames = x.track.filter(p => p.segment === seg).map(p => p.frame);
-  if (frames.length) {
-    $("scrub").min = Math.min(...frames); $("scrub").max = Math.max(...frames);
-    $("scrub").disabled = false;
-  } else { $("scrub").disabled = true; }
+// Saved at once, with the type and competition number OGN has for it.
+async function useCandidate(c) {
+  dirty.delete("reg");
+  await act("edit", {
+    registration: c.registration,
+    competition_number: c.competition_number || "",
+    aircraft_type: c.aircraft_type || "",
+    source: "ogn",
+  });
 }
 
 // The status strip under the scrubber: labelled chips, or a plain hint.
@@ -514,31 +601,54 @@ const signed = m => (m >= 0 ? "+" : "−") + Math.abs(m).toFixed(1) + " m";
 function showOverlay() {
   stopLoop();
   showingOverlay = true;
-  frameIndex = current.confirmed_frame ?? current.frame;
+  const scored = current.confirmed_frame ?? current.frame;
+  const scoredSeg = (current.confirmed_frame != null && current.confirmed_segment) || contactSeg();
+  frameIndex = scored != null ? posOf(scoredSeg, scored) : -1;
+  if (frameIndex < 0) frameIndex = null;
   $("scrub").value = frameIndex ?? 0;
   $("shot").src = current.overlay_path ? `/api/landings/${encodeURIComponent(session)}/${current.id}/overlay.jpg?t=${Date.now()}` : "";
   $("svg").innerHTML = "";
   setInfo([
     ["view", "overlay"],
-    ["frame", frameIndex],
+    ["frame", scored],
     current.subframe != null ? ["contact", `frame ${current.subframe.toFixed(1)}`, "amber"] : null,
     current.outcome === "measured" && current.scored_longitudinal_m != null ? ["offset", signed(current.scored_longitudinal_m), "amber"] : null,
   ]);
+  refreshLens();
 }
 
 // Show one frame of the extracted window: the picture, the geometry, the strip.
-function showFrame(frame, src, utc) {
-  const seg = current.segment || current.track[0].segment;
-  frameIndex = frame;
+// The wheel's contact point clicked by the judge on a frame the tracker
+// missed: {pos, x, y, m}, image pixels and the measured offset.
+let clicked = null;
+let shownUtc = null;
+
+function showFrame(pos, src, utc) {
+  const { segment, frame } = timeline[pos];
+  if (clicked && clicked.pos !== pos) clicked = null;
+  frameIndex = pos;
   showingOverlay = false;
+  shownUtc = utc;
   $("shot").src = src;
-  $("scrub").value = frame;
-  drawMarker(frame);
-  const p = current.track.find(q => q.segment === seg && q.frame === frame);
+  $("scrub").value = pos;
+  drawMarker(segment, frame);
+  frameInfo();
+  refreshLens();
+}
+
+function frameInfo() {
+  const { segment, frame } = timeline[frameIndex];
+  const utc = shownUtc;
+  const p = current.track.find(q => q.segment === segment && q.frame === frame);
   const lon = p ? (current.direction * p.world_x) : null;
-  const isAuto = current.outcome === "measured" && frame === current.frame;
+  const isAuto = current.outcome === "measured" && segment === contactSeg() && frame === current.frame;
+  const other = segment !== contactSeg();
+  const mine = clicked && clicked.pos === frameIndex ? clicked : null;
   setInfo([
-    ["frame", frame + (current.subframe != null ? ` / contact ${current.subframe.toFixed(1)}` : "")],
+    ["frame", frame + (current.subframe != null && !other ? ` / contact ${current.subframe.toFixed(1)}` : "")],
+    other ? ["segment", segment.replace(/[.]mp4$/, "")] : null,
+    mine ? ["clicked", mine.m === undefined ? "measuring…" : mine.m === null ? "outside the calibration" : signed(mine.m), "amber"] : null,
+    !p && !mine ? ["", "not tracked - click the wheel's contact point to measure", "warn"] : null,
     utc ? ["utc", utc.slice(11, 23)] : null,
     lon != null ? ["wheel", signed(lon), isAuto ? "amber" : ""] : null,
     p && p.reach_px != null ? ["shadow", `${p.reach_px} px`] : null,
@@ -548,16 +658,24 @@ function showFrame(frame, src, utc) {
   ]);
 }
 
-async function goto(frame) {
-  if (!current || busy) return;
+// While one frame loads, only the latest request waits; a fast drag along the
+// bar ends on the frame where it was let go, not on one it passed.
+let pendingPos = null;
+async function goto(pos) {
+  if (!current || !timeline.length) return;
+  if (busy) { pendingPos = pos; return; }
   stopLoop();
-  const seg = current.segment || current.track[0].segment;
+  pos = Math.max(0, Math.min(timeline.length - 1, pos));
+  const { segment, frame } = timeline[pos];
   busy = true;
   try {
-    windowState = await post("/api/viewer/window", { session, segment: seg, frame });
-    showFrame(windowState.frame, `/api/viewer/frame/${windowState.frame}.jpg`, windowState.utc);
+    windowState = await post("/api/viewer/window", { session, segment, frame });
+    showFrame(pos, `/api/viewer/frame/${windowState.frame}.jpg`, windowState.utc);
   } catch (e) { showError(e.message); }
-  finally { busy = false; }
+  finally {
+    busy = false;
+    if (pendingPos != null) { const next = pendingPos; pendingPos = null; goto(next); }
+  }
 }
 
 // ---- loop the whole pass -----------------------------------------------------
@@ -575,8 +693,8 @@ function stopLoop() {
 
 async function startLoop() {
   if (!current || busy) return;
-  const seg = current.segment || current.track[0].segment;
-  const frames = current.track.filter(q => q.segment === seg && !q.clipped).map(q => q.frame);
+  const seg = contactSeg();
+  const frames = current.track.filter(q => q.segment === seg).map(q => q.frame);
   if (frames.length < 2) return;
   const lo = Math.min(...frames), hi = Math.max(...frames);
   busy = true;
@@ -602,7 +720,8 @@ async function startLoop() {
   const tick = () => {
     const f = loopFrames[i];
     i = (i + 1) % loopFrames.length;
-    if (loopBlobs.has(f)) showFrame(f, loopBlobs.get(f), null);
+    const pos = posOf(seg, f);
+    if (loopBlobs.has(f) && pos >= 0) showFrame(pos, loopBlobs.get(f), null);
   };
   tick();
   loopTimer = setInterval(tick, 1000 / Number($("loopFps").value));
@@ -611,32 +730,64 @@ async function startLoop() {
 $("loop").addEventListener("click", () => looping ? stopLoop() : startLoop());
 
 // ---- the magnifier ------------------------------------------------------------
-// The same lens as the frame viewer: 5x of the picture under the pointer.
+// The same lens as the frame viewer: 5x of the picture. Over the picture it
+// shows what is under the pointer; anywhere else it follows the wheel, frame
+// by frame, so the contact can be watched while scrubbing or looping.
 // Only the picture is magnified, not the drawn geometry, so the wheel can
 // be judged against the grass without lines in the way.
-(function () {
+
+// The wheel in the frame shown, image pixels: the judge's click or the
+// tracked point. Null where there is none, and on the overlay.
+function wheelPoint() {
+  if (!current || showingOverlay) return null;
+  if (frameIndex == null || !timeline[frameIndex]) return null;
+  if (clicked && clicked.pos === frameIndex) return [clicked.x, clicked.y];
+  const { segment, frame } = timeline[frameIndex];
+  const p = current.track.find(q => q.segment === segment && q.frame === frame);
+  return p ? [p.u, p.v] : null;
+}
+
+const refreshLens = (function () {
   const shot = $("shot"), lens = $("lens"), ZOOM = 5, R = 95;
-  let enabled = true;
+  let enabled = true, pointer = null;  // pointer: client x, y while over the picture
   try { enabled = localStorage.getItem("tda.lens") !== "off"; } catch (e) {}
-  const paint = () => { $("lensBtn").classList.toggle("active", enabled); if (!enabled) lens.classList.remove("on"); };
+
+  // magnify around (x, y) in picture pixels on screen, the lens drawn above it
+  function show(x, y) {
+    const rect = shot.getBoundingClientRect();
+    lens.classList.add("on");
+    lens.style.left = (rect.left + x - R) + "px";
+    lens.style.top = (rect.top + y - R - 110) + "px";
+    lens.style.backgroundImage = `url("${shot.src}")`;
+    lens.style.backgroundSize = `${rect.width * ZOOM}px ${rect.height * ZOOM}px`;
+    lens.style.backgroundPosition = `${-x * ZOOM + R}px ${-y * ZOOM + R}px`;
+  }
+
+  function refresh() {
+    // never the overlay: its drawn lines would cover the wheel
+    if (!enabled || !shot.getAttribute("src") || showingOverlay) { lens.classList.remove("on"); return; }
+    const rect = shot.getBoundingClientRect();
+    if (pointer) { show(pointer[0] - rect.left, pointer[1] - rect.top); return; }
+    const w = wheelPoint();
+    // the wheel, unless it is off the screen
+    if (!w || rect.bottom < 0 || rect.top > innerHeight) { lens.classList.remove("on"); return; }
+    const scale = rect.width / (shot.naturalWidth || 1920);
+    show(w[0] * scale, w[1] * scale);
+  }
+
+  const paint = () => { $("lensBtn").classList.toggle("active", enabled); refresh(); };
   paint();
   $("lensBtn").addEventListener("click", () => {
     enabled = !enabled;
     try { localStorage.setItem("tda.lens", enabled ? "on" : "off"); } catch (e) {}
     paint();
   });
-  shot.addEventListener("mousemove", ev => {
-    if (!enabled || !shot.src) return;
-    const rect = shot.getBoundingClientRect();
-    const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
-    lens.classList.add("on");
-    lens.style.left = (x - R) + "px";
-    lens.style.top = (y - R - 110) + "px";
-    lens.style.backgroundImage = `url("${shot.src}")`;
-    lens.style.backgroundSize = `${rect.width * ZOOM}px ${rect.height * ZOOM}px`;
-    lens.style.backgroundPosition = `${-x * ZOOM + R}px ${-y * ZOOM + R}px`;
-  });
-  shot.addEventListener("mouseleave", () => lens.classList.remove("on"));
+  shot.addEventListener("mousemove", ev => { pointer = [ev.clientX, ev.clientY]; refresh(); });
+  shot.addEventListener("mouseleave", () => { pointer = null; refresh(); });
+  shot.addEventListener("load", refresh);
+  window.addEventListener("scroll", () => { pointer = null; refresh(); }, { passive: true });
+  window.addEventListener("resize", refresh);
+  return refresh;
 })();
 $("loopFps").addEventListener("change", () => { if (looping) { stopLoop(); startLoop(); } });
 
@@ -676,14 +827,16 @@ function geometry() {
   return s;
 }
 
-function drawMarker(frame) {
-  const seg = current.segment || current.track[0].segment;
-  const p = current.track.find(q => q.segment === seg && q.frame === frame);
+function drawMarker(segment, frame) {
+  const seg = contactSeg();
+  const p = current.track.find(q => q.segment === segment && q.frame === frame);
   // the wheel's path: approach (airborne) in cyan up to the automatic
-  // touchpoint, ground run in green; clipped frames are not drawn
-  const whole = current.track.filter(q => q.segment === seg && !q.clipped);
+  // touchpoint, ground run in green, to where the wheel leaves the picture.
+  // Segment names sort by time, so the path runs on across a segment boundary.
+  const whole = current.track;
   const split = current.outcome === "measured" ? (current.subframe ?? current.frame) : Infinity;
-  const air = whole.filter(q => q.frame <= split), run = whole.filter(q => q.frame > split);
+  const before = q => q.segment < seg || (q.segment === seg && q.frame <= split);
+  const air = whole.filter(before), run = whole.filter(q => !before(q));
   if (air.length && run.length) run.unshift(air[air.length - 1]);
   const pts = q => q.map(z => `${z.u},${z.v}`).join(" ");
   let s = geometry() +
@@ -694,6 +847,15 @@ function drawMarker(frame) {
   if (auto && current.outcome === "measured") {
     s += `<circle cx="${auto.u}" cy="${auto.v}" r="14" fill="none" stroke="#f0b429" stroke-width="2" stroke-dasharray="4 4"/>`;
   }
+  const judged = current.confirmed_frame === frame &&
+    (current.confirmed_segment || seg) === segment && current.image_x != null;
+  const mine = clicked && clicked.pos === frameIndex ? clicked : null;
+  const cross = (x, y, colour) =>
+    `<circle cx="${x}" cy="${y}" r="22" fill="none" stroke="${colour}" stroke-width="3"/>
+     <line x1="${x - 34}" y1="${y}" x2="${x + 34}" y2="${y}" stroke="${colour}" stroke-width="2"/>
+     <line x1="${x}" y1="${y - 34}" x2="${x}" y2="${y + 34}" stroke="${colour}" stroke-width="2"/>`;
+  if (mine) s += cross(mine.x, mine.y, "#ff4fd8");
+  else if (!p && judged) s += cross(current.image_x, current.image_y, "#f0b429");
   if (p) {
     // dashed when the tyre was not itself visible here and the point is interpolated
     const dash = p.tyre_seen === false ? ' stroke-dasharray="6 5"' : "";
@@ -704,6 +866,23 @@ function drawMarker(frame) {
   $("svg").innerHTML = s;
 }
 
+$("shot").addEventListener("click", async ev => {
+  if (!current || showingOverlay || frameIndex == null) return;
+  const shot = $("shot"), rect = shot.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) * (shot.naturalWidth || 1920) / rect.width;
+  const y = (ev.clientY - rect.top) * (shot.naturalHeight || 1080) / rect.height;
+  const pos = frameIndex;
+  clicked = { pos, x, y, m: undefined };
+  const { segment, frame } = timeline[pos];
+  drawMarker(segment, frame);
+  frameInfo();
+  try {
+    const r = await post("/api/viewer/measure", { image_x: x, image_y: y });
+    if (clicked && clicked.pos === pos) clicked.m = r.measurement ? current.direction * r.measurement.world_x : null;
+  } catch (e) { showError(e.message); if (clicked && clicked.pos === pos) clicked.m = null; }
+  if (frameIndex === pos) frameInfo();
+});
+
 $("scrub").addEventListener("input", () => goto(Number($("scrub").value)));
 $("stepBack").addEventListener("click", () => goto((frameIndex ?? 0) - 1));
 $("stepFwd").addEventListener("click", () => goto((frameIndex ?? 0) + 1));
@@ -712,7 +891,7 @@ $("toAuto").addEventListener("click", async () => {
   // the frame the estimator measured, as a raw frame with the marker on it
   // showFrame marks the strip "automatic touchpoint" for this frame itself
   if (!current || current.frame == null) return;
-  await goto(current.frame);
+  await goto(posOf(contactSeg(), current.frame));
 });
 $("resetFrame").addEventListener("click", async () => { await act("edit", { reset_frame: true }); showOverlay(); });
 document.addEventListener("keydown", e => {
@@ -727,6 +906,7 @@ async function act(path, body) {
   showError("");
   try {
     current = await post(`/api/landings/${encodeURIComponent(session)}/${current.id}/${path}`, body);
+    for (const [id, key] of Object.entries(FORM)) if (body && key in body) dirty.delete(id);
     await loadLandings();
     renderCard();
   } catch (e) { showError(e.message); }
@@ -743,7 +923,17 @@ $("saveEdit").addEventListener("click", () => act("edit", {
 }));
 $("useFrame").addEventListener("click", async () => {
   if (frameIndex == null || showingOverlay) { $("cardHint").textContent = "Scrub to the contact frame first."; return; }
-  await act("edit", { frame: frameIndex });
+  // A clicked wheel wins; otherwise the tracked one. The bar reaches frames
+  // the tracker never followed, and those need the click.
+  const { segment, frame } = timeline[frameIndex];
+  const mine = clicked && clicked.pos === frameIndex ? clicked : null;
+  const tracked = current.track.some(q => q.segment === segment && q.frame === frame);
+  if (!mine && !tracked) {
+    $("cardHint").textContent = "No wheel position at this frame - click the wheel's contact point in the picture, then press Use this frame.";
+    return;
+  }
+  await act("edit", mine ? { frame, segment, image_x: mine.x, image_y: mine.y } : { frame, segment });
+  clicked = null;
   showOverlay();
 });
 

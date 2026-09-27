@@ -62,7 +62,7 @@ Write-Host "== app.zip"
 if (Test-Path build\app.zip) { Remove-Item build\app.zip -Force }
 # Python's zipfile rather than Compress-Archive, which now and then fails
 # silently on a folder the virus scanner is still busy with.
-& $python -c "import shutil; shutil.make_archive('build/app', 'zip', '$app')"
+& $python -c "import shutil; shutil.make_archive('build/app', 'zip', r'$app')"
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path build\app.zip)) { throw "app.zip was not written" }
 
 Write-Host "== setup program"

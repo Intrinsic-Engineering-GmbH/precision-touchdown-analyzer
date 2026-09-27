@@ -1,35 +1,32 @@
-"""The main-wheel contact point and the shadow gap, per frame (design 4.2).
+"""The front wheel and its lowest point, per frame and over a track (design 4.2).
 
 Everything downstream maps the contact pixel through the ground-plane
-homography, so it has to be the wheel — a point on the fuselage 0.8 m up is
-off by metres through the same mapping, and a point in the *shadow* is off
-by whatever the sun decides.
+homography, so it has to be the bottom of the tyre - a point on the fuselage
+0.8 m up is off by metres through the same mapping, and a point in the
+*shadow* is off by whatever the sun decides.
 
-Step one is therefore a silhouette that knows the difference between the
-aircraft and its shadow. MOG2's own shadow flag misses a hard sunlit shadow
-on grass, so the split is done here, at full resolution inside the tracked
-box, against MOG2's background image: a foreground pixel that is a darker
-version of the background *with the same chroma* is shadow; anything else
-(white fuselage, red markings, the black tyre — which is achromatic, not
-green) is aircraft.
+Colour cannot tell the tyre from the shadow in this footage: the camera
+renders a hard shadow on the strip as the same saturated near-black blue as
+the rubber and the dark paint. Geometry and time can:
 
-Step two takes the belly line of the aircraft mask — the lowest pixel of
-each column — maps every point to the ground plane and keeps the one that
-lands *closest to the camera*. A point above the ground projects further
-away along its ray, so of all belly-line points the wheel, the one nearest
-the ground, maps nearest. This is also independent of the image tilt of the
-strip, which a plain "lowest pixel" rule is not: over a 6 m fuselage the
-ground line here falls by ~10 px, enough to pick the tail skid instead.
+* **The airframe** is what is clearly *lighter* than the background - white
+  paint. No shadow ever is. Its extent is the size of the aircraft and says
+  where its nose is.
+* **The aircraft's lowest point** in every column is the airframe plus what
+  hangs from it - fairing, gear, hub, tyre - in an unbroken run straight
+  down. A shadow lying on the ground has lit grass between it and the
+  aircraft and is not part of that run.
+* **The front wheel** (:func:`wheel_track`) is the narrow bulge of that
+  outline in the front part of the aircraft. It sits at a fixed fraction of
+  the length behind the nose, which the whole track votes on; a shadow
+  touching the aircraft is broad and slides along it as the height changes,
+  so it gets no majority. The column then follows the aircraft's own smooth
+  motion, and the lowest point under it goes through an anti-jump filter.
 
-Step three reads the shadow: how many rows of dark (tyre, then shadow)
-lie under the belly at the wheel before sunlit ground begins. The shadow
-of the fuselage is displaced from the fuselage by an amount proportional
-to the height of the wheel, so that run shrinks linearly as the wheel comes
-down and stops changing at the instant of contact. Where it stops depends
-on the sun (the tyre, plus whatever shadow still lies under the wheel on
-the ground), which is why the fit downstream looks for the *corner* of the
-series, not for zero. It needs no calibration at all and is the most
-precise cue there is whenever the sun is out (design 4.2).
+The shadow is still the most precise timing cue there is (design 4.2), read
+at the wheel by :func:`locate`: the rows of lit ground between the tyre and
+its shadow close as the wheel comes down and stay closed from the instant of
+contact.
 """
 
 from __future__ import annotations
@@ -43,48 +40,56 @@ from touchdown_analyzer.analysis.detect import Blob
 from touchdown_analyzer.calibration import homography as hg
 
 # Margin around the coarse blob box, full-resolution px, so that a shadow
-# hanging below the wheel is inside the region that gets classified.
+# hanging below the wheel is inside the region that is kept.
 ROI_MARGIN = 40
-# Foreground: summed absolute BGR difference against the background.
+# Changed at all: summed absolute BGR difference against the background.
 FG_DIFF = 45.0
-# Shadow: this much darker than the background at most / at least, and with
-# chroma (channel proportions) within this L1 distance of the background.
-SHADOW_RATIO_MAX = 0.92
-SHADOW_RATIO_MIN = 0.20
-SHADOW_CHROMA = 0.10
+# Airframe: this much lighter than the background (white paint on grass and
+# on the strip), judged on images smoothed by HALO_SIGMA - the camera
+# sharpens, and the bright rim it draws along every dark edge would read as
+# paint otherwise.
+AIRFRAME_RATIO = 1.12
+HALO_SIGMA = 1.5
+# Components of the airframe mask this much smaller than the largest are
+# specks of bright ground, not aircraft.
+MINOR_FRACTION = 0.1
+# Shortest airframe worth measuring, px.
+MIN_LENGTH_PX = 60.0
+# Hanging parts differ from the ground by this much, smoothed, summed over
+# B, G and R; a run of them may skip RUN_GAP_PX rows, and reaches at most
+# HANG_FRACTION of the aircraft's length below the airframe (a taildragger's
+# gear leg is the longest).
+SOLID_DIFF = 60.0
+# An end of the airframe is its last this fraction of the length.
+END_FRACTION = 0.03
+RUN_GAP_PX = 1
+HANG_FRACTION = 0.22
 
-# Fraction of the silhouette width, centred, in which the wheel is looked for.
-# The main wheel sits under the wing root; the tail is ~3.5 m off centre on a
-# 15 m span, so 0.6 keeps both tail and wingtips out.
-CENTRAL_BAND = 0.6
-SMOOTH_COLUMNS = 7
-# Belly-line points within this much (metres of apparent depth) of the
-# lowest one are all "the wheel"; the contact column is their median. The
-# belly of a white fuselage is flat to a pixel or two over a hundred
-# columns, so a plain argmin would wander along it from frame to frame.
-LOW_BAND_M = 0.25
-# Columns either side of the wheel used for the shadow extent, and how far
-# below the wheel a shadow still counts as its shadow.
-GAP_HALF_WIDTH = 10
-GAP_MAX_PX = 200
-
+_K2 = np.ones((2, 2), np.uint8)
 _K3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-_K5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+_K9 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
 
 
 @dataclass(slots=True)
-class Silhouette:
-    """Full-resolution aircraft and shadow masks of one blob."""
+class View:
+    """What one frame shows of one aircraft, kept until its track is complete."""
 
     x0: int
     y0: int
-    aircraft: np.ndarray  # bool
-    shadow: np.ndarray  # bool
-    ratio: np.ndarray  # float32, luminance relative to the background
+    ratio: np.ndarray  # float16, frame luminance / background luminance
+    tail: float  # image x extent of the airframe
+    nose: float  # (``nose`` > ``tail``; which end leads is decided per track)
+    cu: float  # image x of the airframe's centroid
+    left_v: float  # image y of the airframe at its left / right end
+    right_v: float
+    at_left: bool  # the region reaches the left / right edge of the image
+    at_right: bool
+    air_bottom: np.ndarray  # per region column: the airframe's lowest row, -1 if none
+    lowest: np.ndarray  # per region column: the aircraft's lowest row, -1 if none
 
     @property
-    def width(self) -> int:
-        return int(self.aircraft.shape[1])
+    def length(self) -> float:
+        return self.nose - self.tail
 
 
 @dataclass(slots=True)
@@ -97,8 +102,8 @@ class ContactPoint:
     world_y: float  # metres across the strip
 
 
-def extract(frame: np.ndarray, background: np.ndarray, blob: Blob) -> Silhouette | None:
-    """Classify the pixels around ``blob`` into aircraft, shadow, background."""
+def extract(frame: np.ndarray, background: np.ndarray, blob: Blob) -> View | None:
+    """Airframe, outline and the ratio image around ``blob``."""
     height, width = frame.shape[:2]
     x0 = max(0, blob.x - ROI_MARGIN)
     y0 = max(0, blob.y - ROI_MARGIN)
@@ -109,263 +114,134 @@ def extract(frame: np.ndarray, background: np.ndarray, blob: Blob) -> Silhouette
 
     roi = frame[y0:y1, x0:x1].astype(np.float32)
     back = background[y0:y1, x0:x1].astype(np.float32)
-
-    foreground = np.abs(roi - back).sum(axis=2) > FG_DIFF
     ratio = roi.mean(axis=2) / (back.mean(axis=2) + 1.0)
-    chroma_roi = roi / (roi.sum(axis=2, keepdims=True) + 1.0)
-    chroma_back = back / (back.sum(axis=2, keepdims=True) + 1.0)
-    chroma_distance = np.abs(chroma_roi - chroma_back).sum(axis=2)
-    shadow = (
-        foreground
-        & (ratio < SHADOW_RATIO_MAX)
-        & (ratio > SHADOW_RATIO_MIN)
-        & (chroma_distance < SHADOW_CHROMA)
-    )
-    aircraft = foreground & ~shadow
+    # Only what the detector saw move: ground texture elsewhere in the box
+    # differs from the (blurred) background model too.
+    moving = _moving(blob, x0, y0, ratio.shape) & (np.abs(roi - back).sum(axis=2) > FG_DIFF)
 
-    aircraft_u8 = cv2.morphologyEx(aircraft.astype(np.uint8), cv2.MORPH_OPEN, _K3)
-    aircraft_u8 = cv2.morphologyEx(aircraft_u8, cv2.MORPH_CLOSE, _K5, iterations=2)
-    shadow_u8 = cv2.morphologyEx(shadow.astype(np.uint8), cv2.MORPH_OPEN, _K3)
-    shadow_u8 = cv2.morphologyEx(shadow_u8, cv2.MORPH_CLOSE, _K5)
-    # Keep the aircraft's own components only. The boundary of a shadow is
-    # a line of mixed pixels whose chroma matches neither side, and those
-    # specks would otherwise put a "belly" at the bottom of the shadow.
-    aircraft_u8 = _keep_major(aircraft_u8, blob.x - x0, blob.y - y0, blob.w, blob.h)
-    if not aircraft_u8.any():
+    soft_roi = cv2.GaussianBlur(roi, (0, 0), HALO_SIGMA)
+    soft_back = cv2.GaussianBlur(back, (0, 0), HALO_SIGMA)
+    soft_ratio = soft_roi.mean(axis=2) / (soft_back.mean(axis=2) + 1.0)
+    light = cv2.morphologyEx(
+        (moving & (soft_ratio >= AIRFRAME_RATIO)).astype(np.uint8), cv2.MORPH_OPEN, _K3
+    )
+    aircraft = _keep_major(cv2.morphologyEx(light, cv2.MORPH_CLOSE, _K9, iterations=2))
+    if not aircraft.any():
         return None
-    return Silhouette(
-        x0=x0, y0=y0, aircraft=aircraft_u8 > 0, shadow=shadow_u8 > 0, ratio=ratio.astype(np.float32)
+    ys, xs = np.nonzero(aircraft)
+    tail, nose = float(xs.min() + x0), float(xs.max() + x0 + 1)
+    if nose - tail < MIN_LENGTH_PX:
+        return None
+    # the row of each end: where the airframe is, over its last few columns
+    tip = max(2.0, END_FRACTION * (nose - tail))
+    left_v = float(ys[xs <= xs.min() + tip].mean() + y0)
+    right_v = float(ys[xs >= xs.max() - tip].mean() + y0)
+
+    solid = moving & (np.abs(soft_roi - soft_back).sum(axis=2) > SOLID_DIFF)
+    air_bottom, lowest = _outline(aircraft, solid, nose - tail)
+    return View(
+        x0=x0,
+        y0=y0,
+        ratio=ratio.astype(np.float16),
+        tail=tail,
+        nose=nose,
+        cu=float(xs.mean() + x0),
+        left_v=left_v,
+        right_v=right_v,
+        at_left=x0 == 0,
+        at_right=x1 == width,
+        air_bottom=air_bottom,
+        lowest=lowest,
     )
 
 
-# A component this much smaller than the largest is debris, not aircraft.
-MINOR_FRACTION = 0.05
+def _moving(blob: Blob, x0: int, y0: int, shape: tuple[int, ...]) -> np.ndarray:
+    """The detector's own foreground, at full resolution in the region."""
+    out = np.zeros(shape[:2], np.uint8)
+    if blob.mask.size == 0:
+        return np.ones(shape[:2], dtype=bool)
+    mask = cv2.resize(blob.mask.astype(np.uint8), (blob.w, blob.h), interpolation=cv2.INTER_NEAREST)
+    bx, by = blob.x - x0, blob.y - y0
+    h = min(mask.shape[0], out.shape[0] - by)
+    w = min(mask.shape[1], out.shape[1] - bx)
+    out[by : by + h, bx : bx + w] = mask[:h, :w]
+    return np.asarray(cv2.dilate(out, _K9) > 0)
 
 
-def _keep_major(mask: np.ndarray, bx: int, by: int, bw: int, bh: int) -> np.ndarray:
+def _keep_major(mask: np.ndarray) -> np.ndarray:
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    if count <= 2:
-        return mask
+    if count <= 1:
+        return np.zeros(mask.shape, bool)
     areas = stats[1:, cv2.CC_STAT_AREA]
-    floor = MINOR_FRACTION * areas.max()
     keep = np.zeros(count, dtype=bool)
-    for label in range(1, count):
-        x, y, w, h, area = stats[label]
-        overlaps = x < bx + bw and x + w > bx and y < by + bh and y + h > by
-        keep[label] = bool(overlaps and area >= floor)
-    return np.where(keep[labels], mask, 0).astype(np.uint8)
+    keep[1:] = areas >= MINOR_FRACTION * areas.max()
+    return np.asarray(keep[labels])
 
 
-def belly_line(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(columns, bottom rows) of a boolean silhouette."""
-    columns = np.flatnonzero(mask.any(axis=0))
-    if columns.size == 0:
-        return columns, columns
-    flipped = mask[::-1, columns]
-    bottoms = (mask.shape[0] - 1) - flipped.argmax(axis=0)
-    return columns, bottoms
+def _outline(
+    aircraft: np.ndarray, solid: np.ndarray, length: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per column: the airframe's lowest row, and the aircraft's lowest row.
 
-
-def fuselage_columns(mask: np.ndarray) -> np.ndarray | None:
-    """The columns under the fuselage body.
-
-    Seen from the side a glider is a thin wing, a thin tail boom, a fin and
-    one thick body around the cockpit and wing root — which is where the
-    main wheel is. Thickness (foreground pixels per column) separates the
-    body from wing and boom. The fin is thick too, so of the thick runs the
-    one nearest the middle of the wingspan is taken: the body sits under
-    the wing root, the fin out at the end of the boom.
+    The aircraft reaches below its airframe by whatever hangs from it in an
+    unbroken run of ``solid`` pixels straight down, at most ``HANG_FRACTION``
+    of its length. -1 where a column has no airframe.
     """
-    thickness = mask.sum(axis=0)
-    present = np.flatnonzero(thickness)
-    if present.size == 0:
-        return None
-    centre = (present[0] + present[-1]) / 2
-    if thickness.size >= SMOOTH_COLUMNS:
-        padded = np.pad(thickness, SMOOTH_COLUMNS // 2, mode="edge")
-        thickness = np.median(
-            np.lib.stride_tricks.sliding_window_view(padded, SMOOTH_COLUMNS), axis=1
-        )
-    thick = thickness >= THICK_FRACTION * thickness.max()
-    runs: list[tuple[int, int]] = []
-    start = None
-    for i, flag in enumerate(np.append(thick, False)):
-        if flag and start is None:
-            start = i
-        elif not flag and start is not None:
-            runs.append((start, i))
-            start = None
-    if not runs:
-        return None
-    lo, hi = min(runs, key=lambda r: abs((r[0] + r[1]) / 2 - centre))
-    # The main wheel is behind the cockpit, under the wing root, where the
-    # fuselage has already begun to taper - often just past the end of the
-    # thick run. Widen it; the boom either side is thin and sits higher, so
-    # the wheel still wins as the lowest point.
-    margin = int(round(BODY_MARGIN * (hi - lo)))
-    return np.arange(max(0, lo - margin), min(mask.shape[1], hi + margin))
+    rows_n, cols_n = aircraft.shape
+    rows = np.arange(rows_n)[:, None]
+    has_air = aircraft.any(axis=0)
+    air_bottom = np.where(has_air, (rows * aircraft).max(axis=0), -1)
+    lowest = air_bottom.copy()
+    alive = has_air.copy()
+    missed = np.zeros(cols_n, dtype=np.int32)
+    columns = np.arange(cols_n)
+    for step in range(1, int(round(HANG_FRACTION * length)) + 1):
+        r = air_bottom + step
+        inside = alive & (r < rows_n)
+        hit = np.zeros(cols_n, dtype=bool)
+        hit[inside] = solid[r[inside], columns[inside]]
+        lowest = np.where(hit, r, lowest)
+        missed = np.where(hit, 0, missed + 1)
+        alive = inside & (missed <= RUN_GAP_PX)
+        if not alive.any():
+            break
+    return air_bottom.astype(np.int32), lowest.astype(np.int32)
 
 
-# Columns at least this fraction of the thickest column count as body, and
-# the body run is widened by this fraction of its length on each side.
-THICK_FRACTION = 0.4
-BODY_MARGIN = 0.4
+# --------------------------------------------------------------------------
+# the wheel over a track
+# --------------------------------------------------------------------------
 
-
-@dataclass(slots=True)
-class Tyre:
-    """A black, compact thing along the belly: a tyre, or something like one."""
-
-    u: float  # image x of its centre
-    v: float  # image y of its bottom edge - what touches the ground
-    width: float
-    height: float
-    area: float
-    darkness: float  # mean ratio, lower is blacker
-
-
-@dataclass(slots=True)
-class BellyProfile:
-    """Per-column readings under the fuselage of one frame.
-
-    Everything the track needs later, so the silhouette itself can go: the
-    wheel is tracked once per track (see :func:`wheel_track`), which needs
-    the profiles of every frame first.
-    """
-
-    us: np.ndarray  # image x of each column (pixel centres)
-    belly: np.ndarray  # image y of the fairing's lowest pixel edge per column (above the tyre)
-    reach: np.ndarray  # rows of dark below the belly (tyre, shadow) before lit ground; nan = none
-    gap: np.ndarray  # rows of lit ground between the tyre and its shadow; nan = no tyre / shadow
-    darkest: np.ndarray  # darkest ratio around the belly per column
-    in_body: np.ndarray  # bool, column lies under the fuselage body
-    body_centre: float  # image x of the middle of the fuselage run
-    tyres: list[Tyre]  # black compact blobs along the belly, largest first
-
-    @property
-    def wheel_u(self) -> float | None:
-        """Column of the main tyre: the widest black thing along the belly.
-
-        Rubber reads far darker than any shadow (ratio ~0.1 against ~0.4).
-        The widest such blob is the main wheel (a tail wheel is a third the
-        size).
-        """
-        return self.tyres[0].u if self.tyres else None
-
-    @property
-    def lowest_u(self) -> float:
-        """Column under the body where the aircraft reaches lowest."""
-        belly = np.where(self.in_body, self.belly, -np.inf) if self.in_body.any() else self.belly
-        return float(self.us[int(np.argmax(belly))])
-
-
-def profile(silhouette: Silhouette) -> BellyProfile | None:
-    """Read the belly, the tyre and the shadow reach of every column."""
-    columns, bottoms = belly_line(silhouette.aircraft)
-    if columns.size < 3:
-        return None
-    body = fuselage_columns(silhouette.aircraft)
-    if body is None or body.size < 3:
-        span_lo, span_hi = columns.min(), columns.max()
-        span = span_hi - span_lo
-        lo = span_lo + span * (1 - CENTRAL_BAND) / 2
-        hi = span_lo + span * (1 + CENTRAL_BAND) / 2
-        body = columns[(columns >= lo) & (columns <= hi)]
-    in_body = np.isin(columns, body)
-
-    reach = np.full(columns.size, np.nan)
-    gap = np.full(columns.size, np.nan)
-    darkest = np.ones(columns.size)
-    fairing = bottoms.astype(float)
-    ratio = silhouette.ratio
-    rows = ratio.shape[0]
-    for i, (c, bottom) in enumerate(zip(columns, bottoms, strict=True)):
-        # Whether the black tyre ended up inside the aircraft mask depends
-        # on the frame; the fairing above it is a steady reference, so walk
-        # up out of the rubber and measure everything from there.
-        b = int(bottom)
-        while b > 0 and ratio[b, c] < TYRE_RATIO and bottom - b < TYRE_ABOVE_PX:
-            b -= 1
-        fairing[i] = b
-        r = _column_reach(ratio[b + 1 :, c])
-        if r is not None:
-            reach[i] = r
-        g = _column_gap(ratio[b + 1 :, c])
-        if g is not None:
-            gap[i] = g
-        lo = max(0, int(bottom) - TYRE_ABOVE_PX)
-        hi = min(rows, int(bottom) + TYRE_BELOW_PX)
-        if hi > lo:
-            darkest[i] = float(ratio[lo:hi, c].min())
-
-    body_us = (
-        silhouette.x0 + columns[in_body] + 0.5 if in_body.any() else silhouette.x0 + columns + 0.5
-    )
-    return BellyProfile(
-        us=silhouette.x0 + columns + 0.5,
-        belly=silhouette.y0 + fairing + 1.0,
-        reach=reach,
-        gap=gap,
-        darkest=darkest,
-        in_body=in_body,
-        body_centre=float((body_us[0] + body_us[-1]) / 2),
-        tyres=find_tyres(silhouette, columns, bottoms),
-    )
-
-
-def find_tyres(silhouette: Silhouette, columns: np.ndarray, bottoms: np.ndarray) -> list[Tyre]:
-    """Black compact blobs in a band along the belly line, largest first.
-
-    The band runs from TYRE_ABOVE_PX above the aircraft's lowest pixel to
-    TYRE_BELOW_PX below it in every column, so a tyre counts whether the
-    mask swallowed it or not, while the dark canopy higher up does not.
-    """
-    ratio = silhouette.ratio
-    rows, width = ratio.shape
-    band = np.zeros((rows, width), dtype=bool)
-    for c, bottom in zip(columns, bottoms, strict=True):
-        lo = max(0, int(bottom) - TYRE_ABOVE_PX)
-        hi = min(rows, int(bottom) + TYRE_BELOW_PX + 1)
-        band[lo:hi, c] = True
-    if not band.any():
-        return []
-    # The threshold follows the blackest thing on the belly: in sunshine the
-    # tyre's core (~0.05) is far below the umbra beneath it (~0.3), and a
-    # tight cut keeps the two apart; under an overcast sky nothing is that
-    # black, the tyre is merely the darkest thing there, and the cut rises.
-    darkest = float(ratio[band].min())
-    cut = float(np.clip(darkest + TYRE_CONTRAST, TYRE_CUT_MIN, TYRE_CUT_MAX))
-    dark = ((ratio < cut) & band).astype(np.uint8)
-    if not dark.any():
-        return []
-    count, labels, stats, centroids = cv2.connectedComponentsWithStats(dark, connectivity=8)
-    found: list[Tyre] = []
-    for label in range(1, count):
-        x, y, w, h, area = (int(v) for v in stats[label])
-        if area < TYRE_MIN_AREA or w > TYRE_MAX_WIDTH or h > TYRE_ABOVE_PX + TYRE_BELOW_PX:
-            continue
-        member = labels == label
-        found.append(
-            Tyre(
-                u=float(silhouette.x0 + centroids[label][0] + 0.5),
-                v=float(silhouette.y0 + y + h),
-                width=float(w),
-                height=float(h),
-                area=float(area),
-                darkness=float(ratio[member].mean()),
-            )
-        )
-    found.sort(key=lambda tyre: tyre.area, reverse=True)
-    return found[:TYRE_MAX_CANDIDATES]
-
-
-# The wheel column over a track is a smooth function of time; a frame whose
-# tyre reading is further than this from that curve is a mis-read (the
-# other wheel of a taildragger, the tug in a shared blob) and is replaced
-# by the curve. The curve is used outright where the column it names is not
-# in the silhouette at all.
-WHEEL_OUTLIER_PX = 40.0
-WHEEL_MISSING_PX = 25.0
+# Where along the aircraft the front (main) wheel is looked for, as a fraction
+# of the length back from the nose - under the cockpit or the wing root on a
+# glider and a taildragger alike. Shadows touching the nose, the tail wheel
+# and the skid are outside.
+FRONT_MIN = 0.15
+FRONT_MAX = 0.55
+FRONT_TYPICAL = 0.25
+# The outline a wheel bulges from: this fraction of the length either side.
+# A frame votes for the wheel's place when its bulge is this deep and at most
+# BULGE_WIDTH of the length wide - a wheel standing clear, not a shadow.
+PROTRUSION_FRACTION = 0.1
+BULGE_MIN_PX = 3.0
+BULGE_WIDTH = 0.07
+# How far from where the nose puts it the wheel's own bulge is sought, and
+# the half width, as fractions of the length, of the column read for the
+# lowest point.
+REFINE_FRACTION = 0.08
+WINDOW_FRACTION = 0.015
+# Play in how far the wheel hangs: the gear gives, the pixels jitter.
+HANG_PLAY_PX = 2.0
+# The wheel column over a track is a smooth function of time; a reading
+# further than this from that curve is replaced by it.
+WHEEL_OUTLIER_PX = 12.0
+# The anti-jump filter (_robust_local): a robust line through this many
+# frames either side of each; frames with the aircraft cut off at the edge
+# count this much; a reading within JUMP_PX of the path is "seen".
+SMOOTH_HALF_FRAMES = 8
+EDGE_WEIGHT = 0.05
+ROBUST_ITERATIONS = 4
+JUMP_PX = 2.5
 
 
 def _smooth(
@@ -374,7 +250,8 @@ def _smooth(
     """(fitted curve, kept readings): a low-order polynomial in time through
     the good readings with outliers thrown out."""
     if good.sum() < 3:
-        return raw.copy(), good.copy()
+        fill = float(np.median(raw[good])) if good.any() else 0.0
+        return np.where(good, raw, fill), good.copy()
     t0 = t - t[0]
     keep = good.copy()
     coef = np.polyfit(t0[keep], raw[keep], 1)
@@ -393,163 +270,296 @@ def _smooth(
 
 @dataclass(slots=True)
 class WheelTrack:
-    """The main wheel through a track: one point per frame."""
+    """The front wheel through a track: one point per frame."""
 
     u: np.ndarray
-    v: np.ndarray  # bottom of the tyre
-    seen: np.ndarray  # bool: the tyre itself was found in this frame
+    v: np.ndarray  # lowest point of the wheel; -1 where there was none
+    seen: np.ndarray  # bool: something hung below the airframe at the wheel
+    length_px: float = 0.0  # the aircraft, nose to tail
+    fraction: float = 0.0  # where the wheel sits, back from the nose
+    hang_px: float = 0.0  # how far the wheel reaches below the airframe
 
 
-def wheel_track(profiles: list[BellyProfile], t: np.ndarray, usable: np.ndarray) -> WheelTrack:
-    """Follow the tyre through the track; interpolate where it is hidden.
+def wheel_track(views: list[View], t: np.ndarray, usable: np.ndarray) -> WheelTrack:
+    """The front wheel's lowest point in every frame of a track.
 
-    The main wheel is a black compact blob that moves smoothly. Frame by
-    frame the widest candidate says roughly where it is; a quadratic in
-    time through those (outliers out - the other wheel of a taildragger,
-    the tug in a shared blob) gives the column everywhere. Then, in every
-    frame, the candidate nearest that column *is* the tyre, and the bottom
-    of its blob is the contact row; a second smoothed curve through those
-    rows gives the row where no candidate exists (wheel fully in the wing's
-    shade) and overrules a candidate whose bottom is off the curve (a
-    dark fairing seam, a wheel-well shadow). So the point never hops
-    between the rubber and the belly above it. With no tyre in the whole
-    track the lowest point of the belly stands in, smoothed the same way.
+    ``usable``: the frames that show the whole aircraft (not cut off at the
+    edge of the picture).
     """
-    n = len(profiles)
-    widest = np.array([p.wheel_u if p.wheel_u is not None else np.nan for p in profiles])
-    raw_u = np.where(np.isnan(widest), [p.lowest_u for p in profiles], widest)
-    good_u = usable & ~np.isnan(widest)
-    if good_u.sum() < 5:
-        good_u = usable.copy()
-    fitted_u, keep_u = _smooth(t, raw_u, good_u, WHEEL_OUTLIER_PX)
-    column = np.where(keep_u, raw_u, fitted_u)
+    n = len(views)
+    t = np.asarray(t, dtype=float)
+    usable = np.asarray(usable, dtype=bool)
+    good = usable if usable.sum() >= 3 else np.ones(n, dtype=bool)
+    lengths = np.array([vw.length for vw in views])
+    length = float(np.median(lengths[good]))
+    fit_cu, _ = _smooth(t, np.array([vw.cu for vw in views]), good, 0.05 * length)
+    heading = 1.0 if fit_cu[-1] >= fit_cu[0] else -1.0
+    noses = np.array([_nose(vw, heading, length) for vw in views])
+    bulges = [_protrusion(vw.lowest, int(round(PROTRUSION_FRACTION * length))) for vw in views]
 
-    # The tyre nearest the column in each frame.
-    u = column.copy()
-    v = np.full(n, np.nan)
-    seen = np.zeros(n, dtype=bool)
-    for i, prof in enumerate(profiles):
-        near = [tyre for tyre in prof.tyres if abs(tyre.u - column[i]) <= TYRE_CAPTURE_PX]
-        if near:
-            tyre = min(near, key=lambda ty: abs(ty.u - column[i]))
-            u[i], v[i], seen[i] = tyre.u, tyre.v, True
-    if seen.sum() >= 3:
-        fitted_v, keep_v = _smooth(t, np.where(seen, v, 0.0), seen & usable, TYRE_ROW_OUTLIER_PX)
-        v = np.where(keep_v, v, fitted_v)
-        seen = keep_v
+    # where along the aircraft the wheel is: the frames' vote
+    fractions = np.full(n, np.nan)
+    for i, vw in enumerate(views):
+        frac = (noses[i] - (vw.x0 + np.arange(vw.lowest.size) + 0.5)) * heading / length
+        front = (frac >= FRONT_MIN) & (frac <= FRONT_MAX) & (vw.lowest >= 0)
+        if front.any():
+            k = int(np.flatnonzero(front)[np.argmax(bulges[i][front])])
+            if _narrow(bulges[i], k, BULGE_WIDTH * length):
+                fractions[i] = frac[k]
+    have = np.isfinite(fractions) & good
+    if not have.any():
+        have = np.isfinite(fractions)
+    fraction = float(np.median(fractions[have])) if have.any() else FRONT_TYPICAL
+
+    # the column: rigid with the nose, whose reading jitters, so smoothed;
+    # then pulled onto the wheel's own bulge nearby and smoothed again, as
+    # the length's reading drifts when a propeller or a wingtip comes and goes
+    predicted, _ = _smooth(t, noses - heading * fraction * length, good, WHEEL_OUTLIER_PX)
+    reach = max(3, int(round(REFINE_FRACTION * length)))
+    found = np.full(n, np.nan)
+    for i, vw in enumerate(views):
+        c = int(round(predicted[i] - vw.x0))
+        lo, hi = max(0, c - reach), min(vw.lowest.size, c + reach + 1)
+        if hi - lo >= 3:
+            k = int(np.argmax(bulges[i][lo:hi]))
+            if bulges[i][lo + k] >= BULGE_MIN_PX:
+                found[i] = vw.x0 + lo + k + 0.5
+    # where the aircraft is cut off at the edge its bulges are half a wheel
+    # or a gear leg: the column there is carried on from the whole frames
+    have_u = np.isfinite(found) & good
+    if have_u.sum() < 3:
+        have_u = np.isfinite(found)
+    if have_u.sum() >= 3:
+        offset = float(np.median(found[have_u] - predicted[have_u]))
+        u, _ = _smooth(t, np.where(have_u, found, predicted + offset), have_u, WHEEL_OUTLIER_PX)
     else:
-        # No tyre to speak of: the belly at the column, a tyre height up,
-        # smoothed in time the same way so it cannot hop either.
-        belly = np.array(
-            [
-                prof.belly[int(np.argmin(np.abs(prof.us - column[i])))]
-                for i, prof in enumerate(profiles)
-            ]
-        )
-        fitted_v, keep_v = _smooth(t, belly, usable, TYRE_ROW_OUTLIER_PX)
-        v = np.where(keep_v, belly, fitted_v)
-        seen[:] = False
-    return WheelTrack(u=u, v=v, seen=seen)
+        u = predicted
 
+    # the lowest point under it, and how far below the airframe that is
+    half = max(2, int(round(WINDOW_FRACTION * length)))
+    v = np.full(n, np.nan)
+    base = np.full(n, np.nan)
+    clear = np.zeros(n, dtype=bool)
+    seen = np.zeros(n, dtype=bool)
+    for i, vw in enumerate(views):
+        c = int(round(u[i] - vw.x0))
+        lo, hi = max(0, c - half), min(vw.lowest.size, c + half + 1)
+        air = vw.air_bottom[lo:hi] if hi > lo else vw.air_bottom[:0]
+        if not (air >= 0).any():
+            continue
+        window = vw.lowest[lo:hi]
+        k = lo + int(np.argmax(window))
+        v[i] = float(window.max()) + 1.0 + vw.y0
+        base[i] = float(np.median(air[air >= 0])) + 1.0 + vw.y0
+        seen[i] = bool((window > air).any())
+        clear[i] = _narrow(bulges[i], k, BULGE_WIDTH * length)
+    ok = np.isfinite(v)
+    if not ok.any():
+        return WheelTrack(u=u, v=np.full(n, -1.0), seen=seen, length_px=length, fraction=fraction)
 
-def locate(
-    prof: BellyProfile, u: float, v: float, matrix: np.ndarray | list[list[float]]
-) -> tuple[ContactPoint, float | None, float | None] | None:
-    """(contact point, tyre gap, shadow reach) of one frame at wheel ``(u, v)``.
+    # The wheel hangs a fixed distance below the airframe. Where it stands
+    # clear that distance can be read; a shadow touching the tyre only ever
+    # makes it look longer, so it is capped there.
+    hang = v - base
+    clear &= ok & good
+    if clear.sum() >= 3:
+        hang_px = float(np.median(hang[clear]))
+        v = np.where(ok, np.minimum(v, base + hang_px + max(HANG_PLAY_PX, 0.1 * hang_px)), v)
+    else:
+        hang_px = float(np.nanmedian(hang))
 
-    ``None`` when the silhouette has no belly near that column - the point
-    the track predicts is not on this frame's aircraft at all.
-    """
-    i = int(np.argmin(np.abs(prof.us - u)))
-    if abs(float(prof.us[i]) - u) > WHEEL_MISSING_PX:
-        return None
-    world_x, world_y = hg.project(matrix, u, v)
-    band = np.abs(prof.us - u) <= GAP_HALF_WIDTH
-    need = max(3, int(band.sum()) // 3)
+    # The reference is the nose - the airframe's foremost point in the
+    # direction of flight, which no shadow ever reaches. Its path is smooth:
+    # every point a robust local line through its neighbours, frames where
+    # it is cut off at the edge counting little.
+    leads = np.array([not (vw.at_right if heading > 0 else vw.at_left) for vw in views])
+    nose_weight = np.where(leads, 1.0, EDGE_WEIGHT)
+    nose_v = np.array([vw.right_v if heading > 0 else vw.left_v for vw in views])
+    nose_u = _robust_local(t, noses, nose_weight, SMOOTH_HALF_FRAMES)
+    nose_v = _robust_local(t, nose_v, nose_weight, SMOOTH_HALF_FRAMES)
 
-    def median_of(values: np.ndarray) -> float | None:
-        valid = values[band][np.isfinite(values[band])]
-        return float(np.median(valid)) if valid.size >= need else None
-
-    reach = median_of(prof.reach)
-    if reach is not None:
-        # Reach was read from the fairing; report it from the tyre's bottom.
-        reach = max(0.0, reach - (v - float(np.median(prof.belly[band]))))
-    return (
-        ContactPoint(u=u, v=v, world_x=world_x, world_y=world_y),
-        median_of(prof.gap),
-        reach,
+    # The wheel is rigid on the aircraft: its offset from the nose, read in
+    # the frames where the wheel stands clear, places it in every frame.
+    sel = clear & leads
+    if sel.sum() < 3:
+        sel = ok & good & leads
+    if sel.sum() < 3:
+        sel = ok
+    du = float(np.median(u[sel] - nose_u[sel]))
+    dv = float(np.median(v[sel] - nose_v[sel]))
+    wheel_u, wheel_v = nose_u + du, nose_v + dv
+    return WheelTrack(
+        u=wheel_u,
+        v=wheel_v,
+        seen=seen & ok & (np.abs(np.where(ok, v, wheel_v) - wheel_v) <= JUMP_PX),
+        length_px=length,
+        fraction=fraction,
+        hang_px=hang_px,
     )
 
 
-# The tyre: darker than this relative to the background, looked for from
-# this far above the belly line (a black tyre is inside the aircraft mask)
-# to this far below it (a grey one in shade is not).
-TYRE_RATIO = 0.28
-TYRE_ABOVE_PX = 20
-TYRE_BELOW_PX = 12
-# A tyre blob: at least this many pixels, at most this wide; the few largest
-# per frame are kept as candidates. A candidate within TYRE_CAPTURE_PX of
-# the track's column is the wheel; a bottom row further than
-# TYRE_ROW_OUTLIER_PX from the smoothed row is not the rubber.
-TYRE_MIN_AREA = 12
-TYRE_MAX_WIDTH = 60
-TYRE_MAX_CANDIDATES = 6
-TYRE_CAPTURE_PX = 25.0
-TYRE_ROW_OUTLIER_PX = 8.0
-# Tyre blobs are cut this much above the blackest pixel on the belly, within
-# these bounds (see find_tyres).
-TYRE_CONTRAST = 0.12
-TYRE_CUT_MIN = 0.18
-TYRE_CUT_MAX = 0.45
+def _nose(view: View, heading: float, length: float) -> float:
+    """The leading end of the airframe; from the trailing end while it is cut off."""
+    if heading > 0:
+        return view.nose if not view.at_right else view.tail + length
+    return view.tail if not view.at_left else view.nose - length
 
-# Below the belly, luminance relative to the background: sunlit ground is
+
+def _protrusion(lowest: np.ndarray, half: int) -> np.ndarray:
+    """How far each column reaches below the outline around it.
+
+    A wheel - with its gear or fairing - is a narrow bulge under the belly;
+    a shadow that touches the aircraft is broad, and lifts the surrounding
+    median with it.
+    """
+    filled = lowest.astype(float)
+    if (filled < 0).all():
+        return np.zeros_like(filled)
+    filled[filled < 0] = np.min(filled[filled >= 0])
+    half = max(2, half)
+    padded = np.pad(filled, half, mode="edge")
+    around = np.median(np.lib.stride_tricks.sliding_window_view(padded, 2 * half + 1), axis=1)
+    return np.asarray(filled - around)
+
+
+def _narrow(bulge: np.ndarray, k: int, width: float) -> bool:
+    """The bulge at ``k`` is deep enough and no wider than ``width``."""
+    if bulge[k] < BULGE_MIN_PX:
+        return False
+    out = bulge > max(BULGE_MIN_PX, 0.5 * bulge[k])
+    lo = hi = k
+    while lo > 0 and out[lo - 1]:
+        lo -= 1
+    while hi < out.size - 1 and out[hi + 1]:
+        hi += 1
+    return hi - lo + 1 <= width
+
+
+def _robust_local(t: np.ndarray, y: np.ndarray, weight: np.ndarray, half: int) -> np.ndarray:
+    """Each value replaced by a weighted straight line through its neighbours.
+
+    ``half`` frames either side, tricube-weighted by distance, times
+    ``weight``; then iterated with Tukey's biweight on the residuals, so a
+    reading that leaps away from the others - one frame or a run of them -
+    loses its say. A bend in the path, such as the touchdown, is kept; a step
+    is not.
+    """
+    n = len(y)
+    if n == 0 or not (weight > 0).any():
+        return y.astype(float)
+    # Where the neighbours hardly count (the aircraft still cut off at the
+    # edge) the window widens until it holds enough frames that do: the line
+    # is carried in from where the view is whole.
+    need = min(float(weight.sum()), half + 1.0)
+    spans = []
+    for i in range(n):
+        h = half
+        while weight[max(0, i - h) : i + h + 1].sum() < need and (i - h > 0 or i + h < n - 1):
+            h += 1
+        spans.append(h)
+    robust = np.ones(n)
+    fitted = y.astype(float).copy()
+    for _ in range(ROBUST_ITERATIONS):
+        for i in range(n):
+            h = spans[i]
+            lo, hi = max(0, i - h), min(n, i + h + 1)
+            tricube = (1 - (np.abs(np.arange(lo, hi) - i) / (h + 1)) ** 3) ** 3
+            w = weight[lo:hi] * robust[lo:hi] * tricube
+            if w.sum() <= 1e-9:
+                continue
+            dt = t[lo:hi] - t[i]
+            sw, st, stt = w.sum(), (w * dt).sum(), (w * dt * dt).sum()
+            sy, sty = (w * y[lo:hi]).sum(), (w * dt * y[lo:hi]).sum()
+            det = sw * stt - st * st
+            # the line's value at t[i]; a level where the neighbours all sit at t[i]
+            fitted[i] = (stt * sy - st * sty) / det if abs(det) > 1e-12 else sy / sw
+        residual = np.abs(y - fitted)
+        used = weight > 0
+        sigma = max(JUMP_PX / 2, 1.4826 * float(np.median(residual[used])))
+        cut = 4.685 * sigma
+        robust = np.where(residual < cut, (1 - (residual / cut) ** 2) ** 2, 0.0)
+    return fitted
+
+
+# --------------------------------------------------------------------------
+# one frame at the wheel
+# --------------------------------------------------------------------------
+
+# Columns either side of the wheel read for the shadow, and how far below the
+# tyre a shadow still counts as its shadow.
+GAP_HALF_WIDTH = 10
+GAP_MAX_PX = 200
+
+
+def locate(
+    view: View, u: float, v: float, matrix: np.ndarray | list[list[float]]
+) -> tuple[ContactPoint, float | None, float | None] | None:
+    """(contact point, tyre gap, shadow reach) of one frame at wheel ``(u, v)``.
+
+    ``None`` when ``(u, v)`` is not inside the region of this frame.
+    """
+    col = u - view.x0
+    row = int(round(v - view.y0))
+    rows, cols = view.ratio.shape
+    if not (0 <= col < cols and 0 <= row < rows):
+        return None
+    world_x, world_y = hg.project(matrix, u, v)
+    lo = max(0, int(col) - GAP_HALF_WIDTH)
+    hi = min(cols, int(col) + GAP_HALF_WIDTH + 1)
+    reaches, gaps = [], []
+    for c in range(lo, hi):
+        below = view.ratio[row:, c].astype(np.float32)
+        r = _column_reach(below)
+        if r is not None:
+            reaches.append(r)
+        g = _column_gap(below)
+        if g is not None:
+            gaps.append(g)
+    need = max(3, (hi - lo) // 3)
+    return (
+        ContactPoint(u=u, v=v, world_x=world_x, world_y=world_y),
+        float(np.median(gaps)) if len(gaps) >= need else None,
+        float(np.median(reaches)) if len(reaches) >= need else None,
+    )
+
+
+# Below the tyre, luminance relative to the background: sunlit ground is
 # brighter than LIT; tyre, umbra and penumbra are all darker. Two lit rows
 # in a row end the dark run, so one bright speck of grass cannot.
 LIT = 0.82
 
 
 def _column_reach(ratio: np.ndarray) -> float | None:
-    """Rows of dark under the belly of one column before lit ground.
+    """Rows of dark under the tyre's bottom of one column before lit ground.
 
-    ``ratio`` starts at the row below the aircraft's lowest pixel. ``None``
-    when no lit ground is found within reach - the aircraft is high, or
-    something else dark lies under it.
+    ``None`` when no lit ground is found within reach - something else dark
+    lies under the wheel.
     """
     n = min(len(ratio), GAP_MAX_PX)
-    i = 0
-    while i < n:
+    for i in range(n):
         if ratio[i] > LIT and (i + 1 >= n or ratio[i + 1] > LIT):
             return float(i)
-        i += 1
     return None
 
 
 # Directly under the tyre the ground is in penumbra, not full sun: lit
-# enough to tell from the umbra of the fuselage shadow, which is what the
-# gap is measured against. The tyre's own bottom edge is blurred over a few
-# rows; those are skipped, not counted.
+# enough to tell from the umbra of the shadow, which is what the gap is
+# measured against. The tyre's own bottom edge is blurred over a few rows;
+# those are skipped, not counted.
 GAP_LIT = 0.60
-GAP_BLUR_PX = 4
+GAP_BLUR_PX = 3
 
 
 def _column_gap(ratio: np.ndarray) -> float | None:
     """Rows of lit ground between the bottom of the tyre and its shadow.
 
-    ``ratio`` starts at the row below the fairing. The tyre is the black
-    run at the top; ``None`` when there is none in this column, or when no
-    shadow follows within reach (nothing to close a gap against). Zero
-    when the shadow touches the tyre.
+    ``ratio`` starts at the tyre's bottom row. ``None`` when no shadow
+    follows within reach (nothing to close a gap against). Zero when the
+    shadow touches the tyre.
     """
     n = min(len(ratio), GAP_MAX_PX)
     i = 0
-    while i < n and ratio[i] < TYRE_RATIO:
-        i += 1
-    if i == 0 or i > TYRE_ABOVE_PX:
-        return None
-    # Out of the blurred edge of the rubber, then count the lit rows.
-    edge = i
-    while i < n and ratio[i] < GAP_LIT and i - edge < GAP_BLUR_PX:
+    while i < n and ratio[i] < GAP_LIT and i < GAP_BLUR_PX:
         i += 1
     lit = 0
     while i < n and ratio[i] >= GAP_LIT:

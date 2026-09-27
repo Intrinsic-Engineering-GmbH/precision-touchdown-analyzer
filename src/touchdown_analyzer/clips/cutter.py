@@ -1,8 +1,10 @@
 """ffmpeg clip cutting and clip naming. Stdlib only.
 
-The clip is a fixed window around the touchdown, default -3 s / +5 s. The
-pre-roll comes from the continuous recording, so it exists even though the
-aircraft was only detected as it was about to land.
+The clip runs from a second before the aircraft's wheel comes into the
+measuring window (the ruler drawn on the strip) to a second after it leaves
+it (:func:`around`); without a track, a fixed window around the touchdown,
+-3 s / +5 s. The lead comes from the continuous recording, so it exists even
+though the aircraft was only detected as it was about to land.
 
 Cuts are stream copies: fast, lossless, and with a GOP of 60 at most a
 second early at the start, which is fine for a clip whose job is to be
@@ -20,6 +22,9 @@ from pathlib import Path
 
 PRE_ROLL_S = 3.0
 POST_ROLL_S = 5.0
+# Before the wheel enters the measuring window, and after it leaves it.
+WINDOW_LEAD_S = 1.0
+WINDOW_TAIL_S = 1.0
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -94,3 +99,8 @@ def window(
     touchdown: datetime, *, pre_s: float = PRE_ROLL_S, post_s: float = POST_ROLL_S
 ) -> tuple[datetime, datetime]:
     return touchdown - timedelta(seconds=pre_s), touchdown + timedelta(seconds=post_s)
+
+
+def around(entered: datetime, left: datetime) -> tuple[datetime, datetime]:
+    """The clip for a wheel that was in the measuring window from ``entered`` to ``left``."""
+    return entered - timedelta(seconds=WINDOW_LEAD_S), left + timedelta(seconds=WINDOW_TAIL_S)

@@ -62,6 +62,7 @@ class AnalysisWorker:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._stores: dict[str, LandingStore] = {}
+        self._settling = False  # a segment was skipped as too fresh to probe
 
         # status, written by the thread, read by the UI
         self.session: str | None = None
@@ -185,7 +186,9 @@ class AnalysisWorker:
                 ]
                 self.queue = [s.name for s in todo]
                 if not todo:
-                    if not self.follow or not self._is_recording(session):
+                    # A segment the recorder just closed is still settling;
+                    # quitting now would drop the end of the session.
+                    if not self._settling and (not self.follow or not self._is_recording(session)):
                         break
                     self.stage = "waiting"
                     if self._stop.wait(POLL_S):
@@ -226,6 +229,7 @@ class AnalysisWorker:
         newest = paths[-1].name if paths else None
         now = time.time()
         added = []
+        self._settling = False
         for path in paths:
             if path.name in known:
                 continue
@@ -233,6 +237,7 @@ class AnalysisWorker:
                 continue
             try:
                 if now - path.stat().st_mtime < SETTLE_S:
+                    self._settling = True
                     continue
             except OSError:
                 continue

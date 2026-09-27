@@ -24,23 +24,24 @@
 body { margin:0; background:var(--bg); color:var(--ink);
        font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
 .wrap { max-width:1180px; margin:0 auto; padding:20px 16px 64px; }
-header.brand { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin:0 0 18px;
-               padding:12px 18px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
+header.brand { display:flex; align-items:center; gap:14px; flex-wrap:nowrap; margin:0 0 18px;
+               padding:10px 14px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
                border:1px solid var(--bar-line); }
-.brand .mark { display:flex; align-items:center; gap:12px; }
-.brand .name { font-size:16px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; line-height:1.15; }
+.brand .mark { display:flex; align-items:center; gap:10px; min-width:0; }
+.brand .mark svg { width:32px; height:32px; flex:none; }
+.brand .name { font-size:14px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; line-height:1.15; }
 .brand .ver { font-size:11px; font-weight:500; letter-spacing:.02em; text-transform:none; color:var(--bar-muted); margin-left:8px; }
-.brand .apps { display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
+.brand .apps { flex:none; display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
                border:1px solid var(--bar-line); margin-left:auto; }
-.brand .apps a { display:inline-block; padding:7px 16px; border-radius:7px; font-size:13px; font-weight:600;
+.brand .apps a { display:inline-block; white-space:nowrap; padding:6px 11px; border-radius:7px; font-size:12.5px; font-weight:600;
                  letter-spacing:.03em; color:var(--bar-muted); text-decoration:none; }
 .brand .apps a:hover { color:var(--bar-hover-ink); background:var(--bar-hover); }
 .brand .apps a.on { color:#1a1200; background:#f0b429; }
-.brand .theme { font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
+.brand .theme { flex:none; font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
                 background:var(--bar-well); color:var(--bar-ink); border:1px solid var(--bar-line); }
 .brand .theme:hover { background:var(--bar-hover); color:var(--bar-hover-ink); }
-.brand .dot { margin-left:0; color:var(--bar-muted); }
-@media (max-width: 900px) { .brand .apps { margin-left:0; } }
+.brand .dot { flex:none; white-space:nowrap; margin-left:0; color:var(--bar-muted); }
+@media (max-width: 760px) { header.brand { flex-wrap:wrap; } .brand .apps { margin-left:0; } }
 a { color:var(--accent); }
 .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
          padding:16px; margin-bottom:16px; }
@@ -71,6 +72,7 @@ button:disabled { opacity:.4; cursor:not-allowed; }
              linear-gradient(var(--accent),var(--accent)) 50% 50%/100% 1px no-repeat; opacity:.9; }
 
 #scrub { width:100%; margin-top:10px; }
+video { width:100%; display:block; border-radius:8px; background:#000; margin-top:12px; }
 .tiles { display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); margin-top:12px; }
 .tile { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
 .tile b { display:block; font-size:19px; font-weight:600; font-variant-numeric:tabular-nums; }
@@ -184,6 +186,17 @@ kbd { font:12px ui-monospace,Consolas,monospace; background:var(--bg); border:1p
 </section>
 
 <section class="panel">
+  <h2>Clip</h2>
+  <div class="grid">
+    <div>
+      <label for="clipPick">Event</label>
+      <select id="clipPick"></select>
+    </div>
+  </div>
+  <video id="clip" controls preload="none" hidden></video>
+</section>
+
+<section class="panel">
   <h2>Mark this touchdown</h2>
   <div class="grid">
     <div>
@@ -250,8 +263,33 @@ async function loadSegments() {
     }).join("");
     await goto(0);
     await loadAnnotations();
+    await loadClips();
   } catch (e) { showError(e.message); }
 }
+
+// ---- the analyser's clips ---------------------------------------------------
+// One per event the analyser cut, newest first, as on the Landings page.
+async function loadClips() {
+  const session = $("session").value;
+  let list = [];
+  if (session) {
+    try { list = (await api(`/api/landings/${encodeURIComponent(session)}`)).landings; } catch (e) {}
+  }
+  const cut = list.filter(x => x.clip_path).reverse();
+  const clock = t => t ? new Date(t).toLocaleTimeString() : "";
+  $("clipPick").innerHTML = cut.length
+    ? cut.map(x => `<option value="${escapeHtml(x.id)}">${clock(x.touchdown_utc || x.first_utc)} &middot; ${x.id} &middot; ${escapeHtml(x.registration || "unknown")} &middot; ${escapeHtml(x.label)}</option>`).join("")
+    : '<option value="">no clips in this session</option>';
+  showClip();
+}
+
+function showClip() {
+  const session = $("session").value, id = $("clipPick").value, clip = $("clip");
+  clip.hidden = !id;
+  if (id) clip.src = `/api/landings/${encodeURIComponent(session)}/${encodeURIComponent(id)}/clip.mp4?t=${Date.now()}`;
+  else clip.removeAttribute("src");
+}
+$("clipPick").addEventListener("change", showClip);
 
 async function goto(frame) {
   const session = $("session").value, segment = $("segment").value;
@@ -284,7 +322,7 @@ $("session").addEventListener("change", loadSegments);
 $("segment").addEventListener("change", async () => { await goto(0); });
 
 document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (["INPUT", "SELECT", "VIDEO"].includes(e.target.tagName)) return;
   if (e.key === "ArrowLeft") { e.preventDefault(); step(e.shiftKey ? -10 : -1); }
   if (e.key === "ArrowRight") { e.preventDefault(); step(e.shiftKey ? 10 : 1); }
 });

@@ -458,6 +458,8 @@ class Match:
     probability: float
     candidates: int
     event: str = "landing"  # landing | takeoff | fix
+    # Every aircraft that fitted, best first, so the judge can pick another.
+    options: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -503,6 +505,18 @@ def match_fixes(touchdown: datetime, fixes: list[Fix], field_: Field) -> Match |
         probability=round(probability, 2),
         candidates=len(ranked),
         event="fix",
+        options=[
+            {
+                "flarm_id": f.flarm_id,
+                "registration": f.registration if f.registration != f.flarm_id else "",
+                "competition_number": f.competition_number,
+                "aircraft_type": "",
+                "dt_s": (datetime.fromisoformat(f.utc) - touchdown).total_seconds(),
+                "distance_m": d,
+                "event": "fix",
+            }
+            for _, f, d, _ in ranked
+        ],
     )
 
 
@@ -552,6 +566,18 @@ def match_logbook(touchdown: datetime, sorties: list[Sortie], field_: Field) -> 
         probability=round(probability, 2),
         candidates=len(candidates),
         event=event,
+        options=[
+            {
+                "flarm_id": str(s.raw.get("flarm_id", "")),
+                "registration": s.registration,
+                "competition_number": s.competition_number,
+                "aircraft_type": s.aircraft_type,
+                "dt_s": d,
+                "distance_m": None,
+                "event": e,
+            }
+            for _, d, e, s in candidates
+        ],
     )
 
 

@@ -24,23 +24,24 @@
 body { margin:0; background:var(--bg); color:var(--ink);
        font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
 .wrap { max-width:1180px; margin:0 auto; padding:20px 16px 64px; }
-header.brand { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin:0 0 18px;
-               padding:12px 18px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
+header.brand { display:flex; align-items:center; gap:14px; flex-wrap:nowrap; margin:0 0 18px;
+               padding:10px 14px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
                border:1px solid var(--bar-line); }
-.brand .mark { display:flex; align-items:center; gap:12px; }
-.brand .name { font-size:16px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; line-height:1.15; }
+.brand .mark { display:flex; align-items:center; gap:10px; min-width:0; }
+.brand .mark svg { width:32px; height:32px; flex:none; }
+.brand .name { font-size:14px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; line-height:1.15; }
 .brand .ver { font-size:11px; font-weight:500; letter-spacing:.02em; text-transform:none; color:var(--bar-muted); margin-left:8px; }
-.brand .apps { display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
+.brand .apps { flex:none; display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
                border:1px solid var(--bar-line); margin-left:auto; }
-.brand .apps a { display:inline-block; padding:7px 16px; border-radius:7px; font-size:13px; font-weight:600;
+.brand .apps a { display:inline-block; white-space:nowrap; padding:6px 11px; border-radius:7px; font-size:12.5px; font-weight:600;
                  letter-spacing:.03em; color:var(--bar-muted); text-decoration:none; }
 .brand .apps a:hover { color:var(--bar-hover-ink); background:var(--bar-hover); }
 .brand .apps a.on { color:#1a1200; background:#f0b429; }
-.brand .theme { font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
+.brand .theme { flex:none; font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
                 background:var(--bar-well); color:var(--bar-ink); border:1px solid var(--bar-line); }
 .brand .theme:hover { background:var(--bar-hover); color:var(--bar-hover-ink); }
-.brand .dot { margin-left:0; color:var(--bar-muted); }
-@media (max-width: 900px) { .brand .apps { margin-left:0; } }
+.brand .dot { flex:none; white-space:nowrap; margin-left:0; color:var(--bar-muted); }
+@media (max-width: 760px) { header.brand { flex-wrap:wrap; } .brand .apps { margin-left:0; } }
 a { color:var(--accent); }
 .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
          padding:16px; margin-bottom:16px; }
@@ -138,6 +139,13 @@ kbd { font:12px ui-monospace,Consolas,monospace; background:var(--bg); border:1p
   </nav>
   <button class="theme" id="themeBtn" type="button" aria-label="switch light / dark">☾</button>
 </header>
+
+<section class="panel">
+  <div class="row" style="margin-top:0">
+    <button id="loadLast">Load last calibration</button>
+    <span class="muted" id="loadInfo">Draws the saved markers and grid on the grabbed picture &mdash; grab a new one first to check the camera has not moved.</span>
+  </div>
+</section>
 
 <section class="panel">
   <h2>1 &mdash; Marker layout on the ground</h2>
@@ -379,6 +387,44 @@ $("grab").addEventListener("click", async () => {
   finally { $("grab").disabled = false; $("grab").textContent = "Grab frame"; }
 });
 
+$("loadLast").addEventListener("click", async () => {
+  showError("");
+  let r;
+  try { r = await api("/api/calibration"); } catch (e) { showError(e.message); return; }
+  const cal = r && r.calibration;
+  if (!cal) { $("result").innerHTML = `<div class="note">No calibration saved yet.</div>`; return; }
+
+  markers = cal.markers.map((m, i) => ({
+    label: m.label, world_x: m.world_x, world_y: m.world_y,
+    image_x: m.image_x, image_y: m.image_y, error: cal.per_marker_m[i] ?? null,
+  }));
+  solved = cal; active = -1; $("save").disabled = true;
+  // The grid spans the surveyed layout, whatever step 1 currently says.
+  $("halfLen").value = Math.max(...markers.map(m => Math.abs(m.world_x)));
+  $("halfWid").value = Math.max(...markers.map(m => Math.abs(m.world_y)));
+
+  // Every grab replaces the stored frame, so it may be newer than the clicks.
+  const newer = r.frame_utc && Date.parse(r.frame_utc) > Date.parse(cal.created_utc) + 5000;
+  const cls = cal.acceptable ? "ok" : "warn";
+  $("result").innerHTML = `<div class="note ${cls}">Saved calibration from ${escapeHtml(cal.created_utc.slice(0, 19))}Z: residual ${cal.residual_m.toFixed(3)} m, worst ${cal.worst_m.toFixed(3)} m, ${markers.length} markers.${
+    newer ? "\nThe frame shown was grabbed after this calibration was saved. If the grid no longer sits on the strip, the camera has moved or its zoom or image settings changed: calibrate again." : ""
+  }${cal.notes ? "\n" + escapeHtml(cal.notes) : ""}</div>`;
+
+  $("loadInfo").textContent = `Loaded the calibration from ${cal.created_utc.slice(0, 19)}Z (residual ${cal.residual_m.toFixed(3)} m). Details under 3.`;
+  const show = () => {
+    $("stage").classList.add("ready"); renderRows(); drawOverlay();
+    $("stage").scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  shot.onerror = () => { shot.onerror = null; showError("No frame stored to draw on: grab one."); renderRows(); };
+  shot.onload = () => {
+    shot.onload = shot.onerror = null;
+    imageSize = cal.image_size || [shot.naturalWidth, shot.naturalHeight];
+    $("frameInfo").textContent = `${imageSize[0]}x${imageSize[1]}`;
+    show();
+  };
+  shot.src = "/api/calibration/frame.jpg?t=" + Date.now();
+});
+
 $("clear").addEventListener("click", () => {
   markers.forEach(m => { m.image_x = m.image_y = m.error = null; });
   solved = null; active = 0; $("save").disabled = true; $("result").innerHTML = "";
@@ -424,13 +470,14 @@ $("save").addEventListener("click", () => doSolve(true));
 buildLayout();
 api("/api/status").then(s => {
   if (s && s.saved_source) {
-    $("savedHint").textContent = "- saved: " + s.saved_source + " (leave empty to use it)";
+    $("savedHint").textContent = "- last used is filled in (the password stays on the server)";
     $("source").placeholder = s.saved_source;
+    if (!$("source").value) $("source").value = s.saved_source;
   }
 }).catch(() => {});
 api("/api/calibration").then(r => {
   if (r && r.calibration) {
-    $("result").innerHTML = `<div class="note ok">A saved calibration exists: residual ${r.calibration.residual_m.toFixed(3)} m, ${r.calibration.markers.length} markers, ${escapeHtml(r.calibration.created_utc.slice(0, 19))}Z. Solving again replaces it.</div>`;
+    $("result").innerHTML = `<div class="note ok">A saved calibration exists: residual ${r.calibration.residual_m.toFixed(3)} m, ${r.calibration.markers.length} markers, ${escapeHtml(r.calibration.created_utc.slice(0, 19))}Z. Load last calibration shows it on the frame; solving again replaces it.</div>`;
   }
 }).catch(() => {});
 

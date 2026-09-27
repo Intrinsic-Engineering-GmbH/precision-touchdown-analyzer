@@ -90,6 +90,10 @@ class Landing:
     calibration: dict[str, Any] = field(default_factory=dict)
     track: list[TrackPoint] = field(default_factory=list)
     first_utc: str | None = None
+    # The whole pass as [segment, frame] at each end: every track of it, not
+    # only the one measured. The judge's frame bar spans this.
+    pass_first: list[Any] | None = None
+    pass_last: list[Any] | None = None
     last_utc: str | None = None
 
     # who
@@ -108,6 +112,7 @@ class Landing:
     confirmed_utc: str | None = None
     confirmed_longitudinal_m: float | None = None
     confirmed_frame: int | None = None
+    confirmed_segment: str | None = None  # None: the contact segment
     note: str = ""
     history: list[dict[str, Any]] = field(default_factory=list)
 

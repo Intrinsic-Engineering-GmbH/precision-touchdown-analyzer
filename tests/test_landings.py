@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from touchdown_analyzer.capture import ffmpeg as ff
+from touchdown_analyzer.capture import segments as segments_mod
 from touchdown_analyzer.clips import cutter
 from touchdown_analyzer.control.app import create_app
 from touchdown_analyzer.control.review import ReviewService
@@ -161,6 +162,18 @@ def test_live_feed_parses_and_matches_the_low_close_aircraft() -> None:
     assert match.registration == "HB-3380"
     assert match.candidates == 1  # the high, far one is not a candidate
     assert match.probability > 0.8
+    assert [o["registration"] for o in match.options] == ["HB-3380"]
+
+
+def test_every_live_candidate_is_offered_best_first() -> None:
+    now = datetime.fromisoformat(TD) + timedelta(seconds=7)
+    second = '<m a="46.977200,7.127900,F7,HB-3213,452,11:58:33,7,90,95,-1.0,1,LSTB1,0,DD5678"/>'
+    fixes = ogn.parse_live(LIVE_XML.replace("</markers>", second + "</markers>"), now)
+    field = ogn.Field(airfield="LSTB", lat=46.9769, lon=7.1269, elevation_m=434, enabled=True)
+    match = ogn.match_fixes(datetime.fromisoformat(TD), fixes, field)
+    assert match is not None and match.candidates == 2
+    assert [o["registration"] for o in match.options] == ["HB-3380", "HB-3213"]
+    assert match.options[1]["competition_number"] == "F7"
 
 
 def test_logbook_parses_masked_and_real_times() -> None:
@@ -230,6 +243,10 @@ def test_logbook_matches_a_landing_or_a_takeoff_and_says_which() -> None:
     assert takeoff is not None and takeoff.registration == "HB-ORW" and takeoff.event == "takeoff"
     # both events within a minute of each other: less sure
     assert takeoff.probability < landing.probability or takeoff.candidates > 1
+    # and the judge gets both to choose from, each saying which event it was
+    offered = {(o["registration"], o["event"]) for o in takeoff.options}
+    assert {("HB-ORW", "takeoff"), ("HB-3213", "landing")} <= offered
+    assert len(takeoff.options) == takeoff.candidates
 
 
 def test_field_config_round_trip(tmp_path: Path) -> None:
@@ -333,6 +350,94 @@ def test_confirm_renames_the_clip_and_records_the_judge(client: TestClient) -> N
     assert [h["action"] for h in body["history"]] == ["renamed", "confirmed"]
 
 
+OPTIONS = [
+    {
+        "registration": "HB-3380",
+        "competition_number": "DKU",
+        "aircraft_type": "Discus",
+        "flarm_id": "DD1234",
+        "dt_s": 2.0,
+        "distance_m": 60.0,
+        "event": "fix",
+    },
+    {
+        "registration": "HB-3213",
+        "competition_number": "F7",
+        "aircraft_type": "LS4",
+        "flarm_id": "DD5678",
+        "dt_s": 5.0,
+        "distance_m": 90.0,
+        "event": "fix",
+    },
+]
+
+
+@pytest.fixture
+def ogn_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """A landing OGN identified as HB-3380, with HB-3213 as the runner-up."""
+    monkeypatch.setattr(ff, "find_tool", lambda name, override=None: name)
+    capture = CaptureService(tmp_path / "raw", config_dir=tmp_path / "config")
+    review = ReviewService(capture, out_root=tmp_path / "landings")
+    review.store("2026-09-13").add(
+        landing(
+            registration="HB-3380",
+            competition_number="DKU",
+            aircraft_type="Discus",
+            identified_by="ogn",
+            ogn={
+                **OPTIONS[0],
+                "source": "live",
+                "agl_m": 5.0,
+                "probability": 0.5,
+                "candidates": 2,
+                "options": OPTIONS,
+            },
+        )
+    )
+    return TestClient(create_app(capture, review))
+
+
+def test_judge_picks_another_ogn_candidate(ogn_client: TestClient) -> None:
+    r = ogn_client.post(
+        "/api/landings/2026-09-13/L0001/edit",
+        json={
+            "registration": "HB-3213",
+            "competition_number": "F7",
+            "aircraft_type": "LS4",
+            "source": "ogn",
+        },
+    )
+    body = r.json()
+    assert (body["registration"], body["identified_by"]) == ("HB-3213", "ogn")
+    assert (body["competition_number"], body["aircraft_type"]) == ("F7", "LS4")
+
+
+def test_own_registration_drops_the_ogn_aircraft_details(ogn_client: TestClient) -> None:
+    body = ogn_client.post(
+        "/api/landings/2026-09-13/L0001/edit", json={"registration": "hb-1111"}
+    ).json()
+    assert (body["registration"], body["identified_by"]) == ("HB-1111", "judge")
+    assert (body["competition_number"], body["aircraft_type"]) == ("", "")
+    # typing a registration OGN did see brings that aircraft's details along
+    body = ogn_client.post(
+        "/api/landings/2026-09-13/L0001/confirm", json={"registration": "hb-3213"}
+    ).json()
+    assert (body["competition_number"], body["aircraft_type"]) == ("F7", "LS4")
+
+
+def test_saving_an_unchanged_registration_keeps_its_source(ogn_client: TestClient) -> None:
+    body = ogn_client.post(
+        "/api/landings/2026-09-13/L0001/edit", json={"registration": "HB-3380", "note": "ok"}
+    ).json()
+    assert body["identified_by"] == "ogn" and body["aircraft_type"] == "Discus"
+    assert (
+        ogn_client.post(
+            "/api/landings/2026-09-13/L0001/edit", json={"registration": "X", "source": "radio"}
+        ).status_code
+        == 409
+    )
+
+
 def test_pilot_is_the_judges_entry_and_survives_a_reload(client: TestClient) -> None:
     r = client.post("/api/landings/2026-09-13/L0001/edit", json={"pilot": "  Anna Muster "})
     assert r.status_code == 200 and r.json()["pilot"] == "Anna Muster"
@@ -355,6 +460,119 @@ def test_judge_can_move_the_contact_frame(client: TestClient) -> None:
     # track point 90 is index 10: world_x = -10 + 0.4 * 10
     assert body["confirmed_longitudinal_m"] == pytest.approx(-6.0)
     assert body["label"] == "-6.0 m"
+
+
+def test_judge_cannot_score_a_frame_the_tracker_did_not_follow(client: TestClient) -> None:
+    # the frame bar reaches past the track; the nearest tracked frame must not be scored instead
+    r = client.post("/api/landings/2026-09-13/L0001/edit", json={"frame": 200})
+    assert r.status_code == 409 and "frames 80-119" in r.json()["detail"]
+    assert client.get("/api/landings/2026-09-13/L0001").json()["confirmed_frame"] is None
+
+
+def test_judge_clicks_the_wheel_on_a_frame_the_tracker_missed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # no calibration saved: a click cannot be measured
+    click = {"frame": 200, "image_x": 700.0, "image_y": 650.0}
+    r = client.post("/api/landings/2026-09-13/L0001/edit", json=click)
+    assert r.status_code == 409 and "calibration" in r.json()["detail"]
+
+    monkeypatch.setattr(
+        CaptureService, "measure", lambda self, x, y: {"world_x": 2.5, "world_y": 1.0}
+    )
+    body = client.post("/api/landings/2026-09-13/L0001/edit", json=click).json()
+    assert body["confirmed_frame"] == 200 and body["confirmed_segment"] is None
+    assert body["confirmed_longitudinal_m"] == pytest.approx(2.5)
+    assert (body["image_x"], body["image_y"]) == (700.0, 650.0)
+    assert body["outcome"] == "measured" and body["history"][-1]["clicked"] is True
+
+    # a frame in another segment needs that segment to exist
+    elsewhere = {**click, "segment": "nope.mp4"}
+    r = client.post("/api/landings/2026-09-13/L0001/edit", json=elsewhere)
+    assert r.status_code == 409 and "no segment" in r.json()["detail"]
+
+
+def test_a_clicked_frame_in_the_next_segment_is_kept_with_its_segment(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_dir = tmp_path / "raw" / "2026-09-13"
+    session_dir.mkdir(parents=True)
+    segments_mod.write_index(
+        session_dir,
+        [
+            segments_mod.Segment("s.mp4", "2026-09-13T11:58:30+00:00", 10.0, 600, 60.0, 1),
+            segments_mod.Segment("t.mp4", "2026-09-13T11:58:40+00:00", 10.0, 600, 60.0, 1),
+        ],
+    )
+    monkeypatch.setattr(
+        CaptureService, "measure", lambda self, x, y: {"world_x": -1.5, "world_y": 0.0}
+    )
+    body = client.post(
+        "/api/landings/2026-09-13/L0001/edit",
+        json={"frame": 30, "segment": "t.mp4", "image_x": 900.0, "image_y": 640.0},
+    ).json()
+    assert (body["confirmed_segment"], body["confirmed_frame"]) == ("t.mp4", 30)
+    assert body["touchdown_utc"].startswith("2026-09-13T11:58:40.5")
+    # back to the automatic touchpoint drops the segment too
+    body = client.post("/api/landings/2026-09-13/L0001/edit", json={"reset_frame": True}).json()
+    assert body["confirmed_segment"] is None and body["confirmed_frame"] is None
+
+
+def _set_pass(
+    tmp_path: Path, first: list | None, last: list | None, *, ruler: tuple[int, int] | None = None
+) -> None:
+    """Give L0001 a pass extent, as the analysis records it, and put only the
+    track frames in ``ruler`` over the measuring window (none: all off it)."""
+    path = tmp_path / "landings" / "2026-09-13" / "landings.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for entry in payload["landings"]:
+        if entry["id"] == "L0001":
+            entry["pass_first"], entry["pass_last"] = first, last
+            for point in entry["track"]:
+                if ruler is None or not ruler[0] <= point["frame"] <= ruler[1]:
+                    point["world_x"] = 30.0  # beyond the 19.4 m window
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_frame_bar_spans_the_wheel_over_the_ruler_across_segments(
+    client: TestClient, tmp_path: Path
+) -> None:
+    session_dir = tmp_path / "raw" / "2026-09-13"
+    session_dir.mkdir(parents=True)
+    segments_mod.write_index(
+        session_dir,
+        [
+            segments_mod.Segment("r.mp4", "2026-09-13T11:58:20+00:00", 10.0, 600, 60.0, 1),
+            segments_mod.Segment("s.mp4", "2026-09-13T11:58:30+00:00", 10.0, 600, 60.0, 1),
+            segments_mod.Segment("t.mp4", "2026-09-13T11:58:40+00:00", 10.0, 600, 60.0, 1),
+            # another recording, half an hour later
+            segments_mod.Segment("u.mp4", "2026-09-13T12:30:00+00:00", 10.0, 600, 60.0, 1),
+        ],
+    )
+
+    def bar() -> list[tuple[str, int, int]]:
+        spans = client.get("/api/landings/2026-09-13/L0001/timeline").json()
+        return [(s["segment"], s["first"], s["last"]) for s in spans]
+
+    # the wheel over the ruler for all its tracked frames 80-119: from 1 s
+    # (60 frames) before it came over it to 1 s after it left
+    assert bar() == [("s.mp4", 20, 179)]
+    # over the ruler for part of the track only: that part, whatever the pass
+    _set_pass(tmp_path, ["s.mp4", 10], ["s.mp4", 300], ruler=(90, 109))
+    assert bar() == [("s.mp4", 30, 169)]
+    # never over it: the whole pass; over a segment end it runs on into the
+    # next file, by frame count
+    _set_pass(tmp_path, ["s.mp4", 580], ["t.mp4", 10])
+    assert bar() == [("s.mp4", 520, 599), ("t.mp4", 0, 70)]
+    # and the lead reaches back into the previous one
+    _set_pass(tmp_path, ["s.mp4", 20], ["s.mp4", 90])
+    assert bar() == [("r.mp4", 560, 599), ("s.mp4", 0, 150)]
+    # at the very start of the recording it stops there
+    _set_pass(tmp_path, ["r.mp4", 10], ["r.mp4", 50])
+    assert bar() == [("r.mp4", 0, 110)]
+    # and at the end of one, it does not run on into the next recording
+    _set_pass(tmp_path, ["t.mp4", 540], ["t.mp4", 590])
+    assert bar() == [("t.mp4", 480, 599)]
 
 
 def test_judge_can_go_back_to_the_automatic_touchpoint(client: TestClient) -> None:
@@ -395,7 +613,10 @@ def test_scoring_rules_deduct_short_and_long_differently(tmp_path: Path) -> None
     assert rules.score(4.0, "measured") == 92  # long: 2 pts/m
     assert rules.score(-30.0, "measured") == 0  # never below the floor
     assert rules.score(None, "short") == 0 and rules.score(None, "long") == 0
-    assert rules.score(1.0, "departure") is None and rules.score(None, "unseen") is None
+    # not a touchdown in view: nothing earned
+    for outcome in ("departure", "airborne", "on_ground"):
+        assert rules.score(None, outcome) == 0
+    assert rules.score(None, "unseen") is None  # instant still to be picked
     rules.decimals = 1
     assert rules.score(-1.25, "measured") == 93.8
     scoring.save(tmp_path, rules)
@@ -452,9 +673,7 @@ def test_scores_come_with_the_landings_and_rules_can_be_changed(client: TestClie
     assert r.status_code == 200 and r.json()["max_points"] == 1000
     assert client.get("/api/scoring").json()["short_per_m"] == 50
     assert client.get("/api/landings/2026-09-13/L0001").json()["score"] == 905
-    assert (
-        client.get("/api/landings/2026-09-13/L0002").json()["score"] is None
-    )  # rolling, not scored
+    assert client.get("/api/landings/2026-09-13/L0002").json()["score"] == 0  # rolling
     assert client.post("/api/scoring", json={"max_points": -1}).status_code == 422
     assert client.post("/api/scoring", json={"target_width_m": -1}).status_code == 422
     # a 4 m wide line puts L0001 (-1.9 m) inside it: full points

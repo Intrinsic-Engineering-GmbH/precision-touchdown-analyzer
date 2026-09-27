@@ -25,21 +25,22 @@ body { margin:0; background:var(--bg); color:var(--ink);
        font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
 .wrap { max-width:1180px; margin:0 auto; padding:16px 16px 64px; }
 a { color:var(--accent); }
-header.brand { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin:0 0 18px;
-               padding:12px 18px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
+header.brand { display:flex; align-items:center; gap:14px; flex-wrap:nowrap; margin:0 0 18px;
+               padding:10px 14px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
                border:1px solid var(--bar-line); }
-.brand .mark { display:flex; align-items:center; gap:12px; }
-.brand .name { font-size:16px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; line-height:1.15; }
-.brand .apps { display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
+.brand .mark { display:flex; align-items:center; gap:10px; min-width:0; }
+.brand .mark svg { width:32px; height:32px; flex:none; }
+.brand .name { font-size:14px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; line-height:1.15; }
+.brand .apps { flex:none; display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
                border:1px solid var(--bar-line); margin-left:auto; }
-.brand .apps a { display:inline-block; padding:7px 16px; border-radius:7px; font-size:13px; font-weight:600;
+.brand .apps a { display:inline-block; white-space:nowrap; padding:6px 11px; border-radius:7px; font-size:12.5px; font-weight:600;
                  letter-spacing:.03em; color:var(--bar-muted); text-decoration:none; }
 .brand .apps a:hover { color:var(--bar-hover-ink); background:var(--bar-hover); }
 .brand .apps a.on { color:#1a1200; background:#f0b429; }
-.brand .theme { font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
+.brand .theme { flex:none; font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
                 background:var(--bar-well); color:var(--bar-ink); border:1px solid var(--bar-line); }
 .brand .theme:hover { background:var(--bar-hover); color:var(--bar-hover-ink); }
-@media (max-width: 900px) { .brand .apps { margin-left:0; } }
+@media (max-width: 760px) { header.brand { flex-wrap:wrap; } .brand .apps { margin-left:0; } }
 
 .cols { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
 @media (max-width: 900px) { .cols { grid-template-columns:1fr; } }
@@ -262,8 +263,9 @@ function renderRanking() {
   const scored = ranked.filter(l => l.kind === "landing" && l.status !== "rejected");
   // live from the form, so the ranking follows the rules being edited
   for (const l of scored) {
-    l.live = l.outcome === "measured" && l.scored_longitudinal_m != null ? score(r, l.scored_longitudinal_m)
-           : (l.outcome === "short" || l.outcome === "long") ? r.out_of_range_points : null;
+    l.live = l.outcome === "measured" ? (l.scored_longitudinal_m != null ? score(r, l.scored_longitudinal_m) : null)
+           : l.outcome === "unseen" ? null
+           : (l.outcome === "short" || l.outcome === "long") ? r.out_of_range_points : 0;
   }
   const confirmed = scored.filter(l => l.status === "confirmed").sort((a, b) => (b.live ?? -1) - (a.live ?? -1));
   const pending = scored.filter(l => l.status !== "confirmed").sort((a, b) => (b.live ?? -1) - (a.live ?? -1));

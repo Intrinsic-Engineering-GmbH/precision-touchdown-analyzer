@@ -95,7 +95,7 @@ The camera URL is given once with `--source` (or in the UI) and remembered in
 data/raw/<session>/         10 s segments, session.json, segments.jsonl, recorder.log
 data/landings/<session>/    landings.json - every event, measurement, judge's decision, history
                             <time>_<REG>_overlay.jpg - the contact frame with the geometry drawn in
-                            <time>_<REG>.mp4 - the landing, -3 s / +5 s
+                            <time>_<REG>.mp4 - the pass, 1 s either side of the wheel over the ruler
 config/calibration.json     the ground-plane mapping           config/scoring.json   the scoring rules
 config/ogn.json             the airfield for OGN identification
 ```

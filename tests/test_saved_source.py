@@ -158,3 +158,11 @@ def test_probe_job_never_carries_the_password(
     assert seen["source"] == URL  # the real URL reached ffmpeg
     assert "s3cret" not in job.source  # but not the status payload
     assert "s3cret" not in str(service.probe_status())
+
+
+def test_redacted_saved_source_maps_back(service: CaptureService, _isolated_env: Path) -> None:
+    # The UI prefills the field with the redacted URL from /api/status.
+    config.remember_source(URL)
+    shown = service.status()["saved_source"]
+    assert service.resolve_source(shown, remember=True) == URL
+    assert config.saved_source() == URL

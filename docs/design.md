@@ -63,7 +63,7 @@ src/touchdown_analyzer/
         homography.py    clicked markers → ground-plane homography (DLT), residual
     analysis/            needs OpenCV
         detect.py        MOG2 blobs, nearest-neighbour tracker
-        contact.py       aircraft/shadow split, tyre finding, contact row, shadow reach
+        contact.py       airframe, front wheel and its lowest point, shadow reach
         touchdown.py     shadow-reach and apparent-depth fits → contact instant
         pipeline.py      segments in, Landing records out
         overlay.py       contact frame with the geometry drawn on
@@ -186,8 +186,10 @@ calibration residual above target is flagged on every landing.
 
 ### 3.3 Clips (`clips/cutter.py`)
 
-Fixed window **−3 s / +5 s** around the contact (anchored on frame entry/exit
-for bounds). Stream copy from the covering raw segments: fast, lossless, at
+From **1 s before** the wheel comes over the measuring window (the ruler,
+±19.4 m) **to 1 s after** it leaves it; the judge's frame bar spans the same.
+Without a track, a fixed −3 s / +5 s around the contact. Stream copy from the
+covering raw segments: fast, lossless, at
 most a GOP (1 s) early. Frame-exact work always goes through the raw segments.
 
 Name: `YYYY-MM-DD_HH-MM-SS_<REG>.mp4`, timestamp = touchdown; `UNKNOWN-<seq>`
@@ -238,17 +240,38 @@ camera sits on a fixed mast.
 
 ### 4.2 Contact instant (`analysis/contact.py`, `analysis/touchdown.py`)
 
-Per frame, inside the tracked box at full resolution:
+Per frame, inside the tracked box at full resolution, against MOG2's
+background image brought to the frame's exposure:
 
-1. **Aircraft / shadow split** against MOG2's background image: a foreground
-   pixel that is a darker copy of the background with the same chroma is shadow.
-2. **Tyre**: black compact blobs along the belly of the aircraft mask (cut
-   adaptively above the blackest pixel; rubber reads ~0.1 of the background,
-   shadow ~0.4). The wheel column is a quadratic in time through them with
-   outliers rejected; per frame the blob nearest that column is the tyre and its
-   bottom edge the contact row, smoothed the same way, interpolated only where
-   hidden. Clipped frames are neither fitted nor drawn.
-3. **Shadow reach**: rows of dark under the tyre before sunlit ground begins.
+1. **Airframe**: what is clearly *lighter* than the background (white paint),
+   judged on lightly smoothed images so the camera's sharpening rims along dark
+   edges do not count. No shadow is ever lighter. Its extent is the aircraft's
+   size and its leading end the nose.
+2. **Outline**: per column, the airframe plus what hangs from it (fairing,
+   gear, hub, tyre) in an unbroken run straight down. A shadow on the ground
+   has lit grass between it and the aircraft and is not part of it.
+
+Over the track:
+
+3. **Front wheel column**: the narrow bulge of the outline 15–55 % of the
+   length behind the nose. Its place along the aircraft is the median over the
+   frames where it stands clear (a touching shadow is broad, and slides along
+   the aircraft as the height changes); the column follows the aircraft's
+   smooth motion, pulled onto the bulge frame by frame.
+4. **Lowest point, from the nose**: the reference is the airframe's foremost
+   point in the direction of flight, which no shadow reaches. Its path is
+   smoothed: each point a robust local line through ±8 frames (tricube
+   weights, Tukey biweight on the residuals), so a jump - one frame or a run -
+   loses its say while the bend at touchdown stays; frames with the nose cut
+   off at the edge count 5 %, and at the start of a pass the window widens
+   until whole frames carry the line in. The wheel's offset from the nose is
+   read once, as the median over the frames where the wheel stands clear
+   (bottom of the outline at the wheel column, capped at how far it hangs
+   below the airframe), and places the wheel in every frame - rigid on the
+   aircraft. Against the judge's clicks the row is within ~3 px on average
+   (8.8 px reading the outline itself). The line is drawn and analysed to
+   where the wheel leaves the picture, also while the aircraft is cut off.
+5. **Shadow reach**: rows of dark under the tyre before sunlit ground begins.
 
 Two independent cues, each a corner fit on a per-frame series at sub-frame
 resolution (8 sub-steps):
@@ -322,6 +345,24 @@ Ten clips from a low tripod, six-marker calibration, residual 2.25 m:
   apart, so the estimate is the middle and the spread (±6 m there) the
   uncertainty. With the tyre tracked as an object the result is −3.2 m, the
   frame a 3× zoom picks.
+
+### 4.7 What the second footage changed (26 Sept 2026, strip and tug)
+
+- The camera's auto-exposure darkens the frame by up to 20 % as a white
+  aircraft comes in, right at the touchdown → every frame is scaled to the
+  background's exposure (median ratio) before anything is compared.
+- A hard shadow on the pink strip is saturated blue-black, as are the tyre and
+  dark paint: colour cannot separate them → §4.2 works on lightness, geometry
+  and time instead.
+- A glider's thin tail boom drops out of the mask → blobs side by side are one
+  aircraft; one pass is one event.
+- Against the judge's five clicks the wheel point is now within 21 px across
+  and 15 px down, typically ~10 (it was on the shadow, 20–60 px off), and it
+  no longer jumps (95th-percentile frame-to-frame jerk 4–10 px, was 45–240).
+  The contact *instant* is only slightly better: on the nine corrected
+  landings 25 frames off on average (median 21), was 28 (25). The shadow here
+  falls beside the wheel, so the gap below the tyre rarely reads, and the
+  depth cue cannot tell a landing from a take-off when the ground run drifts.
 - Overcast: no shadow, and with this calibration "rolling" and "floating a
   hand's width up" are indistinguishable (HB-1827) → `unseen`, the judge picks
   the frame. A 0.10 m calibration and the 8 m mast are what let the depth cue

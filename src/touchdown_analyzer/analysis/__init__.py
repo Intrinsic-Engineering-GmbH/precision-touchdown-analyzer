@@ -5,7 +5,7 @@ numpy). It only ever *reads* the raw segments the recorder writes, so nothing
 here can cost a frame of recording (docs/design.md 1).
 
     detect.py     MOG2 foreground blobs and a small constant-velocity tracker
-    contact.py    the main-wheel contact point of a silhouette, per frame
+    contact.py    the front wheel and its lowest point, tracked over a pass
     touchdown.py  descent / ground-run hinge fit -> sub-frame contact instant
     overlay.py    the proof image: contact frame, target line, measured offset
     pipeline.py   segments in, landing records out

@@ -12,7 +12,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import cv2
@@ -35,6 +35,15 @@ log = logging.getLogger(__name__)
 MIN_TRACK_FRAMES = 12
 MIN_TRACK_AREA = 4000.0  # full-resolution px^2 at its largest
 MIN_TRACK_SPAN_PX = 250.0
+
+# One aircraft often leaves several tracks: its blob splits (fuselage and
+# shadow), or the match is lost for a few frames and a new track starts. A
+# finished track is held this long for such partners, then only the best of
+# the group becomes an event.
+HOLD_FRAMES = 30
+# A track that starts within this many frames of another's end, where that
+# one was heading, is the same aircraft picked up again.
+JOIN_GAP_FRAMES = 20
 
 # Half width of the strip plus margin. A "ground run" further out than this
 # is not on the strip: the aircraft was still in the air (docs 3.2).
@@ -119,6 +128,10 @@ class Analyzer:
         self._last: SegmentRef | None = None
         self._width = 1920
         self._pieces: list[cutter.Piece] = []
+        # Finished tracks waiting to be grouped with their partners.
+        self._held: list[Track] = []
+        # Landings whose clip window runs past the footage indexed so far.
+        self._pending_clips: list[tuple[str, datetime, datetime]] = []
 
     # -- geometry helpers -------------------------------------------------
 
@@ -136,8 +149,12 @@ class Analyzer:
     # -- driving ----------------------------------------------------------
 
     def add_pieces(self, segments: list[SegmentRef]) -> None:
-        """Segments the clip cutter may draw on (more than are analysed)."""
+        """Segments the clip cutter may draw on (more than are analysed).
+
+        Clips waiting for their post-roll are cut as soon as it is here.
+        """
         self._pieces = [cutter.Piece(s.path, s.start, s.end) for s in segments]
+        self._cut_pending(force=False)
 
     def run_segment(
         self,
@@ -180,12 +197,8 @@ class Analyzer:
                     background = self.detector.background(frame.shape)
                     for track in updated:
                         self._measure(frame, background, track)
-                for track in finished:
-                    landing = self._finish(track)
-                    if landing is not None:
-                        found.append(landing)
-                        if on_landing:
-                            on_landing(landing)
+                self._held.extend(finished)
+                found += self._release(on_landing, now=self._index)
                 self._prune_frames()
 
                 self._index += 1
@@ -201,25 +214,62 @@ class Analyzer:
         return found
 
     def finish(self, on_landing: LandingFn | None = None) -> list[Landing]:
-        """End of input: flush whatever is still being tracked."""
-        return self._finish_all(on_landing)
+        """End of input: flush whatever is still being tracked.
+
+        Clips still waiting are cut from whatever footage there is: the
+        recording ended before their post-roll did.
+        """
+        found = self._finish_all(on_landing)
+        self._cut_pending(force=True)
+        return found
 
     def _finish_all(self, on_landing: LandingFn | None) -> list[Landing]:
-        found = []
-        for track in self.tracker.flush():
-            landing = self._finish(track)
-            if landing is not None:
-                found.append(landing)
-                if on_landing:
-                    on_landing(landing)
+        self._held.extend(self.tracker.flush())
+        found = self._release(on_landing, now=None)
         self._frames.clear()
         return found
 
+    def _release(self, on_landing: LandingFn | None, *, now: int | None) -> list[Landing]:
+        """Turn complete groups of held tracks into one event each.
+
+        A group is complete when none of it is still being tracked and its
+        last track ended ``HOLD_FRAMES`` ago (``now=None``: at once). Of a
+        group, the track that makes the fullest landing is the event.
+        """
+        if not self._held:
+            return []
+        groups = _group(self._held + self.tracker.active)
+        found = []
+        for group in groups:
+            if any(t in self.tracker.active for t in group):
+                continue
+            if now is not None and max(t.last_index for t in group) + HOLD_FRAMES > now:
+                continue
+            for track in group:
+                self._held.remove(track)
+            built = [b for b in (self._build(t) for t in group) if b is not None]
+            if not built:
+                continue
+            landing, anchor, segment = max(built, key=lambda b: _fullness(b[0]))
+            if len(built) > 1:
+                log.info("%d tracks of one pass: kept %d points", len(built), len(landing.track))
+            seen = [o.index for t in group for o in t.observations]
+            first, last = self._frames.get(min(seen)), self._frames.get(max(seen))
+            if first is not None and last is not None:
+                landing.pass_first = [first.segment.name, first.frame]
+                landing.pass_last = [last.segment.name, last.frame]
+            self._artefacts(landing, anchor, segment)
+            found.append(landing)
+            if on_landing:
+                on_landing(landing)
+        return found
+
     def _prune_frames(self) -> None:
-        if not self.tracker.active:
+        kept = self.tracker.active + self._held
+        if not kept:
             self._frames.clear()
             return
-        oldest = min(t.first_index for t in self.tracker.active)
+        oldest = min(t.first_index for t in kept)
         for index in [i for i in self._frames if i < oldest]:
             del self._frames[index]
 
@@ -228,14 +278,21 @@ class Analyzer:
     def _measure(self, frame: np.ndarray, background: np.ndarray, track: Track) -> None:
         obs = track.last
         obs.clipped = obs.blob.touches_edge(self._width)
-        silhouette = contact_mod.extract(frame, background, obs.blob)
-        if silhouette is not None:
-            obs.profile = contact_mod.profile(silhouette)
+        obs.profile = contact_mod.extract(frame, background, obs.blob)
         obs.blob.mask = obs.blob.mask[:0, :0]  # no longer needed; free it
 
     # -- from track to landing --------------------------------------------
 
     def _finish(self, track: Track) -> Landing | None:
+        built = self._build(track)
+        if built is None:
+            return None
+        landing, anchor, segment = built
+        self._artefacts(landing, anchor, segment)
+        return landing
+
+    def _build(self, track: Track) -> tuple[Landing, TrackPoint, SegmentRef] | None:
+        """The landing a track makes, without writing its overlay or clip."""
         if (
             len(track.observations) < MIN_TRACK_FRAMES
             or track.peak_area < MIN_TRACK_AREA
@@ -243,15 +300,14 @@ class Analyzer:
         ):
             return None
 
-        # The tyre is followed as an object through the whole track - column
-        # and bottom row smoothed in time, candidates that jumped to another
-        # dark part overruled, hidden frames interpolated - so the contact
-        # point never hops between the rubber and the belly above it. See
-        # contact.wheel_track.
+        # The front wheel is chosen once for the whole track - the tyre that
+        # moves with the aircraft under its white airframe - and its lowest
+        # point read in every frame as the tyre's top plus its height, so it
+        # never hops to a shadow or a stripe of paint. See contact.wheel_track.
         measured = [
             (o, self._frames[o.index])
             for o in track.observations
-            if isinstance(o.profile, contact_mod.BellyProfile) and o.index in self._frames
+            if isinstance(o.profile, contact_mod.View) and o.index in self._frames
         ]
         if not measured:
             return None
@@ -290,19 +346,21 @@ class Analyzer:
                     tyre_seen=bool(wheel.seen[i]),
                 )
             )
-            if not obs.clipped:
-                samples.append(
-                    td.Sample(
-                        index=obs.index,
-                        t=ref.t,
-                        world_x=cp.world_x,
-                        world_y=self.far_sign * cp.world_y,
-                        u=cp.u,
-                        v=cp.v,
-                        gap_px=gap,
-                        reach_px=reach,
-                    )
+            # Every frame with the wheel in the picture counts, also while the
+            # aircraft is cut off at the edge: the wheel is placed from the
+            # nose's smooth path there, not read from half an aircraft.
+            samples.append(
+                td.Sample(
+                    index=obs.index,
+                    t=ref.t,
+                    world_x=cp.world_x,
+                    world_y=self.far_sign * cp.world_y,
+                    u=cp.u,
+                    v=cp.v,
+                    gap_px=gap,
+                    reach_px=reach,
                 )
+            )
         if not points:
             return None
         if self.store.has_track(points[0].segment, points[0].frame, points[-1].frame):
@@ -357,7 +415,14 @@ class Analyzer:
             direction=direction,
             speed_mps=abs(est.velocity_mps),
             method=est.method,
-            fit=_fit_payload(est),
+            fit={
+                **_fit_payload(est),
+                "wheel": {
+                    "aircraft_length_px": wheel.length_px,
+                    "fraction_from_nose": wheel.fraction,
+                    "hang_px": wheel.hang_px,
+                },
+            },
             flags=flags,
             calibration={
                 "residual_m": self.calibration.residual_m,
@@ -408,9 +473,7 @@ class Analyzer:
         if landing.subframe is not None:
             when = when + timedelta(seconds=(landing.subframe - anchor.frame) / fps)
         landing.touchdown_utc = when.isoformat()
-
-        self._artefacts(landing, anchor, anchor_ref.segment)
-        return landing
+        return landing, anchor, anchor_ref.segment
 
     # -- artefacts --------------------------------------------------------
 
@@ -426,7 +489,7 @@ class Analyzer:
             frame = overlay_mod.read_frame(segment.path, anchor.frame)
             if frame is not None:
                 unc = f"  +/- {landing.uncertainty_m:.2f} m" if landing.uncertainty_m else ""
-                whole = [p for p in landing.track if not p.clipped]
+                whole = landing.track  # to where the wheel leaves the picture
                 measured = landing.outcome == store_mod.MEASURED
                 # Before contact the wheel is on approach, after it rolling;
                 # a track without a contact is all approach or all ground.
@@ -448,16 +511,139 @@ class Analyzer:
                 path = overlay_mod.save(image, self.out_dir / f"{stem}_overlay.jpg")
                 landing.overlay_path = str(path)
 
-        if self.cut_clips and self.ffmpeg and self._pieces:
-            start, end = cutter.window(when)
-            try:
-                path = cutter.cut(
-                    self._pieces, start, end, self.ffmpeg, self.out_dir / f"{stem}.mp4"
-                )
-                landing.clip_path = str(path)
-            except cutter.ClipError as exc:
-                landing.flags.append(f"clip not cut: {exc}")
-                log.warning("clip for %s not cut: %s", landing.id, exc)
+        if self.cut_clips and self.ffmpeg:
+            start, end = _clip_window(landing, anchor, segment, when)
+            # Live, the segment holding the post-roll is still being written
+            # when the landing is found; cut now and the clip stops short.
+            if self._covered_until() >= end:
+                self._cut_clip(landing, start, end)
+            else:
+                self._pending_clips.append((landing.id, start, end))
+
+    def _covered_until(self) -> datetime:
+        return max((p.end for p in self._pieces), default=datetime.min.replace(tzinfo=UTC))
+
+    def _cut_clip(self, landing: Landing, start: datetime, end: datetime) -> None:
+        if not landing.touchdown_utc:
+            return
+        local = datetime.fromisoformat(landing.touchdown_utc).astimezone()
+        seq = int(landing.id.lstrip("L") or 0)
+        name = cutter.clip_name(local, landing.registration, seq)
+        try:
+            path = cutter.cut(
+                self._pieces, start, end, self.ffmpeg or "ffmpeg", self.out_dir / name
+            )
+            landing.clip_path = str(path)
+        except cutter.ClipError as exc:
+            landing.flags.append(f"clip not cut: {exc}")
+            log.warning("clip for %s not cut: %s", landing.id, exc)
+
+    def _cut_pending(self, *, force: bool) -> None:
+        """Cut the waiting clips whose window is recorded (all, if ``force``)."""
+        if not self._pending_clips or not self._pieces:
+            if force:
+                self._pending_clips.clear()
+            return
+        covered = self._covered_until()
+        waiting = []
+        for landing_id, start, end in self._pending_clips:
+            if not force and covered < end:
+                waiting.append((landing_id, start, end))
+                continue
+            # The stored landing, not the one found: the judge may have
+            # named it since, and that edit must survive.
+            landing = self.store.get(landing_id)
+            if landing is None:
+                continue
+            self._cut_clip(landing, start, end)
+            self.store.update(landing, "clip cut")
+        self._pending_clips = waiting
+
+
+def in_window(landing: Landing) -> list[TrackPoint]:
+    """The track's points while the wheel was over the measuring window (the ruler)."""
+    return [p for p in landing.track if abs(p.world_x) <= WINDOW_HALF_M]
+
+
+def _clip_window(
+    landing: Landing, anchor: TrackPoint | None, segment: SegmentRef | None, when: datetime
+) -> tuple[datetime, datetime]:
+    """A second before the wheel comes over the ruler to a second after it leaves it.
+
+    Without a track (or never over the ruler), the fixed window around the
+    touchdown.
+    """
+    inside = in_window(landing)
+    if anchor is None or segment is None or not inside:
+        return cutter.window(when)
+    at_anchor = segment.start + timedelta(seconds=anchor.frame / segment.fps)
+    return cutter.around(
+        at_anchor + timedelta(seconds=inside[0].t - anchor.t),
+        at_anchor + timedelta(seconds=inside[-1].t - anchor.t),
+    )
+
+
+def _boxes(track: Track) -> dict[int, tuple[float, float, float, float]]:
+    return {
+        o.index: (o.blob.x, o.blob.y, o.blob.x + o.blob.w, o.blob.y + o.blob.h)
+        for o in track.observations
+    }
+
+
+def _touch(a: tuple[float, ...], b: tuple[float, ...], margin: float) -> bool:
+    return (
+        a[0] - margin <= b[2]
+        and b[0] - margin <= a[2]
+        and a[1] - margin <= b[3]
+        and b[1] - margin <= a[3]
+    )
+
+
+def _same_aircraft(a: Track, b: Track) -> bool:
+    """Two tracks of one aircraft: side by side at once, or one continuing the other.
+
+    Two aircraft in view together - a tug and its glider - stay apart in
+    the picture, so their tracks never share a place at the same frame.
+    """
+    if (
+        a.first_index > b.last_index + JOIN_GAP_FRAMES
+        or b.first_index > a.last_index + JOIN_GAP_FRAMES
+    ):
+        return False
+    boxes_a, boxes_b = _boxes(a), _boxes(b)
+    common = boxes_a.keys() & boxes_b.keys()
+    if common:
+        return any(_touch(boxes_a[i], boxes_b[i], 20.0) for i in common)
+    # One after the other: the later one starts where the earlier was heading.
+    early, late = (a, b) if a.last_index < b.first_index else (b, a)
+    gap = late.first_index - early.last_index
+    vx, vy = early.velocity()
+    last = early.last.blob
+    ahead = (
+        last.x + vx * gap,
+        last.y + vy * gap,
+        last.x + last.w + vx * gap,
+        last.y + last.h + vy * gap,
+    )
+    return _touch(
+        ahead, boxes_b[late.first_index] if late is b else boxes_a[late.first_index], 60.0
+    )
+
+
+def _group(tracks: list[Track]) -> list[list[Track]]:
+    """Tracks joined by ``_same_aircraft``, transitively."""
+    groups: list[list[Track]] = []
+    for track in tracks:
+        joined = [g for g in groups if any(_same_aircraft(track, t) for t in g)]
+        merged = [track] + [t for g in joined for t in g]
+        groups = [g for g in groups if g not in joined] + [merged]
+    return groups
+
+
+def _fullness(landing: Landing) -> tuple[int, int]:
+    """Which of a pass's tracks tells most: the longest, a landing before a pass."""
+    rank = {"landing": 2, "departure": 1}.get(landing.kind, 0)
+    return len(landing.track), rank
 
 
 def _fit_payload(est: td.ContactEstimate) -> dict:

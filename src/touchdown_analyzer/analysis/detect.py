@@ -31,8 +31,24 @@ DEFAULT_SCALE = 0.5
 MOG_HISTORY = 120
 MOG_VAR_THRESHOLD = 24
 
+# The camera's auto-exposure reacts to a white aircraft filling part of the
+# picture: the whole frame darkens by up to a fifth, right around the
+# touchdown. Against an unchanged background model that reads as "every
+# pixel is a shadow". Each frame is therefore scaled back to the background's
+# exposure before anything compares the two; the gain is the median ratio,
+# which the aircraft (a small part of the frame) cannot move. Frames within
+# EXPOSURE_TOLERANCE of the background are left alone.
+EXPOSURE_WARMUP = 10
+EXPOSURE_TOLERANCE = 0.01
+EXPOSURE_STEP = 4  # sample every n-th pixel of the detection frame
+
 # Blob filters, in full-resolution pixels.
 MIN_BLOB_AREA = 600  # birds and grass flicker are far smaller
+# A glider's tail boom is a few pixels thick and often drops out of the
+# mask, leaving fin and fuselage as two blobs. Blobs side by side with a gap
+# up to this wide, overlapping in height, are one aircraft. A tug is a rope
+# length ahead - far more than this.
+MERGE_GAP_PX = 80
 MAX_MISSES = 5  # frames a track survives without a detection
 GATE_PX = 220  # max distance between prediction and detection at 60 fps
 
@@ -82,15 +98,37 @@ class Detector:
         self.frames_seen = 0
         self._background: np.ndarray | None = None
         self._background_frame = -1
+        # Per channel: the current frame's exposure over the background's.
+        self.gain = np.ones(3, dtype=np.float32)
 
     def background(self, shape: tuple[int, ...]) -> np.ndarray:
-        """The background model at full resolution, for the current frame."""
+        """The background model at full resolution, at the current frame's exposure."""
         if self._background is None or self._background_frame != self.frames_seen:
             small = self._mog.getBackgroundImage()
             height, width = shape[:2]
-            self._background = cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
+            back = cv2.resize(small, (width, height), interpolation=cv2.INTER_LINEAR)
+            if not np.allclose(self.gain, 1.0):
+                back = np.clip(back * self.gain, 0, 255).astype(np.uint8)
+            self._background = back
             self._background_frame = self.frames_seen
         return self._background
+
+    def _exposure(self, small: np.ndarray) -> np.ndarray:
+        """``small`` brought to the background's exposure; sets ``gain``."""
+        self.gain = np.ones(3, dtype=np.float32)
+        if self.frames_seen < EXPOSURE_WARMUP:
+            return small
+        back = self._mog.getBackgroundImage()
+        if back is None or back.shape != small.shape:
+            return small
+        s = EXPOSURE_STEP
+        now = small[::s, ::s].reshape(-1, 3).astype(np.float32) + 1.0
+        was = back[::s, ::s].reshape(-1, 3).astype(np.float32) + 1.0
+        gain = np.median(now / was, axis=0).astype(np.float32)
+        if np.all(np.abs(gain - 1.0) <= EXPOSURE_TOLERANCE):
+            return small
+        self.gain = gain
+        return np.clip(small / gain, 0, 255).astype(np.uint8)
 
     def apply(self, frame: np.ndarray) -> list[Blob]:
         """Blobs of one BGR frame, largest first."""
@@ -100,6 +138,7 @@ class Detector:
             )
         else:
             small = frame
+        small = self._exposure(small)
         mask = self._mog.apply(small)
         self.frames_seen += 1
 
@@ -109,26 +148,57 @@ class Detector:
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         inv = 1.0 / self.scale
-        blobs: list[Blob] = []
+        # (x0, y0, x1, y1, area) at detection scale, merged side by side
+        boxes: list[list[float]] = []
         for contour in contours:
             area = cv2.contourArea(contour) * inv * inv
             if area < self.min_area:
                 continue
             xs, ys, ws, hs = cv2.boundingRect(contour)
-            roi = mask[ys : ys + hs, xs : xs + ws] > 0
+            boxes.append([xs, ys, xs + ws, ys + hs, area])
+        boxes = _merge_side_by_side(boxes, MERGE_GAP_PX * self.scale)
+        blobs: list[Blob] = []
+        for x0, y0, x1, y1, area in boxes:
+            xs, ys, xe, ye = int(x0), int(y0), int(x1), int(y1)
             blobs.append(
                 Blob(
                     x=int(round(xs * inv)),
                     y=int(round(ys * inv)),
-                    w=int(round(ws * inv)),
-                    h=int(round(hs * inv)),
+                    w=int(round((xe - xs) * inv)),
+                    h=int(round((ye - ys) * inv)),
                     area=float(area),
-                    mask=roi,
+                    mask=mask[ys:ye, xs:xe] > 0,
                     scale=self.scale,
                 )
             )
         blobs.sort(key=lambda b: b.area, reverse=True)
         return blobs
+
+
+def _merge_side_by_side(boxes: list[list[float]], gap: float) -> list[list[float]]:
+    """Union the boxes that overlap in height and are at most ``gap`` apart in x."""
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                a, b = boxes[i], boxes[j]
+                apart = max(a[0], b[0]) - min(a[2], b[2])
+                overlap = min(a[3], b[3]) - max(a[1], b[1])
+                if apart <= gap and overlap > 0:
+                    boxes[i] = [
+                        min(a[0], b[0]),
+                        min(a[1], b[1]),
+                        max(a[2], b[2]),
+                        max(a[3], b[3]),
+                        a[4] + b[4],
+                    ]
+                    del boxes[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return boxes
 
 
 @dataclass(slots=True)
@@ -143,7 +213,7 @@ class Observation:
     index: int  # absolute frame counter of the pipeline
     blob: Blob
     clipped: bool = False
-    profile: object | None = None  # contact.BellyProfile, once measured
+    profile: object | None = None  # contact.View, once measured
 
 
 @dataclass(slots=True)

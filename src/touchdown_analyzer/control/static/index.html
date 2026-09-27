@@ -29,23 +29,24 @@ body {
 }
 .wrap { max-width: 1040px; margin: 0 auto; padding: 16px 16px 64px; }
 /* brand bar: the product, the programs, the live dot */
-header.brand { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin:0 0 18px;
-               padding:12px 18px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
+header.brand { display:flex; align-items:center; gap:14px; flex-wrap:nowrap; margin:0 0 18px;
+               padding:10px 14px; border-radius:12px; background:var(--bar); color:var(--bar-ink);
                border:1px solid var(--bar-line); }
-.brand .mark { display:flex; align-items:center; gap:12px; }
-.brand .name { font-size:16px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; line-height:1.15; }
+.brand .mark { display:flex; align-items:center; gap:10px; min-width:0; }
+.brand .mark svg { width:32px; height:32px; flex:none; }
+.brand .name { font-size:14px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; line-height:1.15; }
 .brand .ver { font-size:11px; font-weight:500; letter-spacing:.02em; text-transform:none; color:var(--bar-muted); margin-left:8px; }
-.brand .apps { display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
+.brand .apps { flex:none; display:inline-flex; gap:2px; padding:3px; border-radius:9px; background:var(--bar-well);
                border:1px solid var(--bar-line); margin-left:auto; }
-.brand .apps a { display:inline-block; padding:7px 16px; border-radius:7px; font-size:13px; font-weight:600;
+.brand .apps a { display:inline-block; white-space:nowrap; padding:6px 11px; border-radius:7px; font-size:12.5px; font-weight:600;
                  letter-spacing:.03em; color:var(--bar-muted); text-decoration:none; }
 .brand .apps a:hover { color:var(--bar-hover-ink); background:var(--bar-hover); }
 .brand .apps a.on { color:#1a1200; background:#f0b429; }
-.brand .theme { font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
+.brand .theme { flex:none; font:inherit; font-size:15px; line-height:1; padding:7px 11px; border-radius:7px; cursor:pointer;
                 background:var(--bar-well); color:var(--bar-ink); border:1px solid var(--bar-line); }
 .brand .theme:hover { background:var(--bar-hover); color:var(--bar-hover-ink); }
-.brand .dot { margin-left:0; color:var(--bar-muted); }
-@media (max-width: 900px) { .brand .apps { margin-left:0; } }
+.brand .dot { flex:none; white-space:nowrap; margin-left:0; color:var(--bar-muted); }
+@media (max-width: 760px) { header.brand { flex-wrap:wrap; } .brand .apps { margin-left:0; } }
 .dot {
   margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
   font-size: 13px; color: var(--muted);
@@ -99,6 +100,9 @@ table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); }
 th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 550; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.actions { white-space: nowrap; }
+td.actions button + button { margin-left: 6px; }
+button.del { color: var(--fail); }
 tr:last-child td { border-bottom: 0; }
 
 .mark { font-weight: 600; font-size: 12px; letter-spacing: 0.04em; }
@@ -237,6 +241,7 @@ code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-siz
     <div class="tile"><b id="tFree">--</b><span>disk free</span></div>
   </div>
   <div class="row"><span class="muted" id="recInfo">Not recording.</span></div>
+  <div class="row"><span class="muted" id="anaInfo">Stop analyses the session automatically.</span></div>
 </section>
 
 <section class="panel" id="probePanel" hidden>
@@ -260,6 +265,7 @@ code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-siz
 const $ = id => document.getElementById(id);
 const FIELDS = ["source", "session", "segment", "fps", "transport", "minfree", "duration"];
 let recording = false;
+let sourceFilled = false;
 
 // Remember the RTSP URL and friends; retyping them in a field shed is no fun.
 for (const id of FIELDS) {
@@ -294,8 +300,12 @@ function hms(seconds) {
 function renderStatus(s) {
   recording = s.recording;
   $("ver").textContent = "v" + s.version;
-  $("savedHint").textContent = s.saved_source ? "- saved: " + s.saved_source + " (leave empty to use it)" : "";
+  $("savedHint").textContent = s.saved_source ? "- last used is filled in (the password stays on the server)" : "";
   $("source").placeholder = s.saved_source || "rtsp://root:password@192.168.200.222/axis-media/media.amp";
+  // The redacted URL goes in the field as is; the server maps it back to the saved one.
+  // Only on the first status, so clearing the field to type a new URL sticks.
+  if (!sourceFilled && s.saved_source && !$("source").value) $("source").value = s.saved_source;
+  sourceFilled = true;
   $("start").disabled = recording;
   $("stop").disabled = !recording;
   $("probeBtn").disabled = recording;
@@ -326,7 +336,24 @@ function renderStatus(s) {
     $("recInfo").textContent = "Last session: " + s.session + ".";
   }
   if (s.error) showError(s.error);
+  renderAnalysis(s.analysis);
   renderProbe(s.probe);
+}
+
+function renderAnalysis(a) {
+  if (!a) return;
+  const info = $("anaInfo");
+  if (a.auto_error) {
+    info.innerHTML = '<span class="mark fail">ANALYSIS</span> ' + escapeHtml(a.auto_error);
+  } else if (a.running) {
+    info.innerHTML = "Analysing " + escapeHtml(a.session) + " (" + escapeHtml(a.stage) + ", " +
+      a.done + " done, " + a.queue + " to go) - results appear under " +
+      '<a href="/landings">Landings</a>.';
+  } else if (a.session) {
+    info.innerHTML = "Analysis of " + escapeHtml(a.session) + " finished" +
+      (a.error ? " with an error: " + escapeHtml(a.error) : "") +
+      ' - see <a href="/landings">Landings</a>.';
+  }
 }
 
 function renderProbe(job) {
@@ -382,13 +409,38 @@ async function refreshSessions() {
     '</td><td class="num">' + s.segments +
     '</td><td class="num">' + s.size_gb.toFixed(2) + " GB</td><td>" +
     (s.indexed ? "yes" : '<span class="muted">no</span>') +
-    '</td><td class="num"><button class="ghost" data-session="' +
+    '</td><td class="num actions"><button class="ghost" data-session="' +
     escapeHtml(s.session) + '"' + (s.recording ? " disabled" : "") +
-    ">Index</button></td></tr>"
+    '>Index</button><button class="ghost del" data-delete="' +
+    escapeHtml(s.session) + '" data-segments="' + s.segments +
+    '" data-size="' + s.size_gb.toFixed(2) + '"' + (s.recording ? " disabled" : "") +
+    ">Delete</button></td></tr>"
   ).join("");
 
   for (const button of body.querySelectorAll("button[data-session]")) {
     button.addEventListener("click", () => indexSession(button.dataset.session, button));
+  }
+  for (const button of body.querySelectorAll("button[data-delete]")) {
+    button.addEventListener("click", () => deleteSession(button));
+  }
+}
+
+async function deleteSession(button) {
+  const session = button.dataset.delete;
+  if (!confirm("Delete session " + session + "?\n\n" +
+      button.dataset.segments + " segment(s), " + button.dataset.size + " GB of recorded video " +
+      "will be removed from disk. This cannot be undone.\n\n" +
+      "Landing results already analysed are kept.")) return;
+  button.disabled = true;
+  button.textContent = "Deleting...";
+  showError("");
+  try {
+    await api("/api/sessions/" + encodeURIComponent(session), { method: "DELETE" });
+    $("reportBox").innerHTML = "";
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    refreshSessions();
   }
 }
 

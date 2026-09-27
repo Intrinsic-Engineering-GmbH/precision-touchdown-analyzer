@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import tempfile
 import threading
 import time
@@ -118,14 +119,17 @@ class CaptureService:
 
         The browser never needs the saved URL itself - it sends an empty
         source and the server fills it in - so the camera password stays on
-        this machine even when the UI is served to the field WiFi.
+        this machine even when the UI is served to the field WiFi. The UI
+        prefills the field with the redacted saved URL; that maps back too.
         """
         source = source.strip()
+        saved = saved_source()
+        if saved and source == redact(saved):
+            return saved
         if source:
-            if remember and source != saved_source():
+            if remember and source != saved:
                 remember_source(source)
             return source
-        saved = saved_source()
         if saved:
             return saved
         raise ServiceError("a source is required (none given and none saved)")
@@ -674,3 +678,25 @@ class CaptureService:
             "overlaps": report.overlaps,
             "fps_outliers": report.fps_outliers,
         }
+
+    def delete_session(self, session: str) -> None:
+        """Remove a session folder and everything recorded into it.
+
+        The name arrives from the browser, so it must be a plain child of the
+        root: anything with a separator or ``..`` is refused rather than
+        joined onto a path. Landing results live elsewhere and are kept.
+        """
+        session_dir = self.root / session
+        if (
+            not session
+            or session in (".", "..")
+            or session_dir.resolve().parent != self.root.resolve()
+            or not session_dir.is_dir()
+        ):
+            raise ServiceError(f"no such session: {session}")
+        if self.is_recording and self._config is not None and self._config.session == session:
+            raise ServiceError("stop the recording before deleting this session")
+        try:
+            shutil.rmtree(session_dir)
+        except OSError as exc:
+            raise ServiceError(f"could not delete {session}: {exc}") from exc

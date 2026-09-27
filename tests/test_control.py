@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from touchdown_analyzer.capture import ffmpeg as ff
 from touchdown_analyzer.capture import recorder as recorder_mod
 from touchdown_analyzer.control.app import create_app
+from touchdown_analyzer.control.review import ReviewService
 from touchdown_analyzer.control.service import CaptureService, ServiceError
 
 SOURCE = "rtsp://user:secret@cam/stream"
@@ -172,6 +173,37 @@ def test_indexing_the_live_session_is_refused(service: CaptureService, fake_reco
 def test_report_for_an_unknown_session(service: CaptureService) -> None:
     with pytest.raises(ServiceError, match="no such session"):
         service.session_report("nope")
+
+
+def test_deleting_a_session_removes_its_folder(service: CaptureService) -> None:
+    for name in ("2026-07-18", "2026-07-19"):
+        session = service.root / name
+        session.mkdir(parents=True)
+        (session / "a.mp4").write_bytes(b"x" * 16)
+
+    service.delete_session("2026-07-18")
+    assert [s["session"] for s in service.sessions()] == ["2026-07-19"]
+
+
+def test_deleting_the_live_session_is_refused(service: CaptureService, fake_record) -> None:
+    (service.root / "live").mkdir(parents=True)
+    service.start(SOURCE, "live")
+    assert fake_record.wait(2.0)
+
+    with pytest.raises(ServiceError, match="stop the recording"):
+        service.delete_session("live")
+    assert (service.root / "live").is_dir()
+
+    service.stop()
+    service.wait(2.0)
+
+
+@pytest.mark.parametrize("name", ["nope", "", ".", "..", "../raw"])
+def test_deleting_outside_the_sessions_is_refused(service: CaptureService, name: str) -> None:
+    (service.root / "kept").mkdir(parents=True)
+    with pytest.raises(ServiceError, match="no such session"):
+        service.delete_session(name)
+    assert (service.root / "kept").is_dir()
 
 
 # --------------------------------------------------------------------------
@@ -445,6 +477,43 @@ def test_start_and_stop_over_http(client: TestClient, fake_record) -> None:
     assert client.post("/api/record/stop").status_code == 409
 
 
+def test_stop_analyses_the_session(client: TestClient, fake_record, monkeypatch) -> None:
+    called = threading.Event()
+    analysed = []
+
+    def start_analysis(self, session, *, follow, fresh=False):
+        analysed.append((session, follow))
+        called.set()
+
+    monkeypatch.setattr(ReviewService, "start_analysis", start_analysis)
+    client.post("/api/record/start", json={"source": SOURCE, "session": "2026-07-18"})
+    assert fake_record.wait(2.0)
+
+    assert client.post("/api/record/stop").status_code == 200
+    assert called.wait(5.0)
+    assert analysed == [("2026-07-18", False)]
+
+
+def test_analysis_that_cannot_start_after_stop_is_reported(
+    client: TestClient, fake_record, monkeypatch
+) -> None:
+    def start_analysis(self, session, *, follow, fresh=False):
+        raise ServiceError("no calibration saved; calibrate before analysing")
+
+    monkeypatch.setattr(ReviewService, "start_analysis", start_analysis)
+    client.post("/api/record/start", json={"source": SOURCE, "session": "2026-07-18"})
+    assert fake_record.wait(2.0)
+    client.post("/api/record/stop")
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        note = client.get("/api/status").json()["analysis"]["auto_error"]
+        if note:
+            break
+        time.sleep(0.05)
+    assert "no calibration saved" in note
+
+
 def test_start_validates_input(client: TestClient) -> None:
     assert client.post("/api/record/start", json={"source": SOURCE}).status_code == 422
     bad_segment = client.post(
@@ -463,6 +532,14 @@ def test_unknown_session_returns_conflict(client: TestClient) -> None:
     assert client.get("/api/sessions/nope").status_code == 409
 
 
+def test_delete_session_over_http(client: TestClient, service: CaptureService) -> None:
+    (service.root / "2026-07-18").mkdir(parents=True)
+    response = client.delete("/api/sessions/2026-07-18")
+    assert response.status_code == 200
+    assert response.json() == []
+    assert client.delete("/api/sessions/2026-07-18").status_code == 409
+
+
 def test_calibration_page_is_served(client: TestClient) -> None:
     response = client.get("/calibration")
     assert response.status_code == 200
@@ -476,7 +553,12 @@ def test_solve_over_http(client: TestClient, service: CaptureService) -> None:
     )
     assert response.status_code == 200
     assert response.json()["acceptable"] is True
-    assert client.get("/api/calibration").json()["calibration"] is not None
+    current = client.get("/api/calibration").json()
+    assert current["calibration"] is not None
+    assert current["frame_utc"] is None  # nothing grabbed in this test
+
+    service.calibration_frame_path.write_bytes(b"jpeg")
+    assert client.get("/api/calibration").json()["frame_utc"].endswith("+00:00")
 
 
 def test_solve_rejects_collinear_markers_over_http(client: TestClient) -> None:

@@ -52,14 +52,19 @@ class ScoringRules:
     def score(self, longitudinal_m: float | None, outcome: str) -> float | None:
         """Points for one landing, or ``None`` when it is not scored at all.
 
-        ``longitudinal_m`` is signed: negative is short of the line.
-        Anything that is not a landing (take-off, fly-through, rolling)
-        earns nothing; a landing measured outside the window, or bounded
-        beyond it, gets the out-of-range points.
+        ``longitudinal_m`` is signed: negative is short of the line. Only a
+        touchdown in view is measured; one whose instant is still to be
+        picked is not scored yet. A landing short of or beyond the window
+        gets the out-of-range points; anything else - take-off, fly-through,
+        rolling - gets 0.
         """
+        if outcome == "unseen":
+            return None
         if outcome in ("short", "long"):
             return round(self.out_of_range_points, self.decimals)
-        if outcome != "measured" or longitudinal_m is None:
+        if outcome != "measured":
+            return round(0.0, self.decimals)
+        if longitudinal_m is None:
             return None
         rate = self.short_per_m if longitudinal_m < 0 else self.long_per_m
         points = self.max_points - rate * self.miss_m(longitudinal_m)

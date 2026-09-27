@@ -10,6 +10,7 @@ credentials in it.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -113,8 +114,14 @@ class EditRequest(BaseModel):
     aircraft_type: str | None = None
     outcome: str | None = None
     frame: int | None = Field(default=None, ge=0)
+    # With ``frame``: its segment (default: the contact one), and the wheel's
+    # contact point clicked by the judge where the tracker had no position.
+    segment: str | None = None
+    image_x: float | None = None
+    image_y: float | None = None
     reset_frame: bool = False  # drop the judge's frame, back to the automatic one
     note: str | None = None
+    source: str = "judge"  # where a new registration came from: judge | ogn
 
 
 class ScoringRequest(BaseModel):
@@ -156,6 +163,10 @@ def create_app(service: CaptureService, review: ReviewService | None = None) -> 
         payload = service.status()
         payload["version"] = __version__
         payload["probe"] = service.probe_status()
+        analysis = review.analysis_status()
+        shown = ("running", "session", "stage", "done", "queue", "error")
+        payload["analysis"] = {key: analysis.get(key) for key in shown}
+        payload["analysis"]["auto_error"] = review.auto_error
         return payload
 
     @app.post("/api/record/start")
@@ -179,11 +190,14 @@ def create_app(service: CaptureService, review: ReviewService | None = None) -> 
 
     @app.post("/api/record/stop")
     async def stop() -> dict[str, Any]:
+        session = service.status()["session"]
         try:
             service.stop()
         except ServiceError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         review.stop_poller()
+        if session:
+            review.analyse_after_recording(session)
         return service.status()
 
     # -- landings: analysis, results, the judge -----------------------------
@@ -240,6 +254,10 @@ def create_app(service: CaptureService, review: ReviewService | None = None) -> 
     async def landing(session: str, landing_id: str) -> dict[str, Any]:
         return review.scored(review.landing(session, landing_id))
 
+    @app.get("/api/landings/{session}/{landing_id}/timeline")
+    async def landing_timeline(session: str, landing_id: str) -> list[dict[str, Any]]:
+        return review.timeline(session, landing_id)
+
     @app.post("/api/landings/{session}/{landing_id}/confirm")
     async def landing_confirm(
         session: str, landing_id: str, request: ConfirmRequest
@@ -275,8 +293,12 @@ def create_app(service: CaptureService, review: ReviewService | None = None) -> 
             aircraft_type=request.aircraft_type,
             outcome=request.outcome,
             frame=request.frame,
+            segment=request.segment,
+            image_x=request.image_x,
+            image_y=request.image_y,
             reset_frame=request.reset_frame,
             note=request.note,
+            source=request.source,
         )
         return review.scored(edited)
 
@@ -394,7 +416,15 @@ def create_app(service: CaptureService, review: ReviewService | None = None) -> 
 
     @app.get("/api/calibration")
     async def calibration_current() -> dict[str, Any]:
-        return {"calibration": service.load_calibration()}
+        # The frame is replaced by every grab, so the page compares its time
+        # with the calibration's to tell whether the markers were clicked on it.
+        frame = service.calibration_frame_path
+        frame_utc = (
+            datetime.fromtimestamp(frame.stat().st_mtime, UTC).isoformat()
+            if frame.is_file()
+            else None
+        )
+        return {"calibration": service.load_calibration(), "frame_utc": frame_utc}
 
     @app.get("/viewer", include_in_schema=False)
     async def viewer_page() -> FileResponse:
@@ -457,6 +487,15 @@ def create_app(service: CaptureService, review: ReviewService | None = None) -> 
             return service.session_report(session)
         except ServiceError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.delete("/api/sessions/{session}")
+    async def session_delete(session: str) -> list[dict[str, Any]]:
+        try:
+            review.release_session(session)
+            service.delete_session(session)
+        except ServiceError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return service.sessions()
 
     return app
 
