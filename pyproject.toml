@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "touchdown-analyzer"
-version = "1.2.1"
+version = "1.3.0"
 description = "Video-based landing accuracy measurement for glider spot-landing competitions"
 readme = "README.md"
 # 3.12+ because numpy 2.5 (used by the calibration solver) requires it.

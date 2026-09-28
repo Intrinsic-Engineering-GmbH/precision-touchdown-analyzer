@@ -766,6 +766,54 @@ def test_ranking_groups_and_orders_like_the_board() -> None:
     assert result.confirmed == 4
 
 
+def test_ranking_by_the_mean_of_each_pilots_landings() -> None:
+    from touchdown_analyzer.store import ranking, scoring
+
+    landings = [
+        scored(id="L0001", pilot="Anna", score=90),
+        scored(id="L0002", pilot="Anna", score=95, touchdown_utc="2026-09-13T12:20:00+00:00"),
+        scored(id="L0003", pilot="Anna", score=80, touchdown_utc="2026-09-13T12:40:00+00:00"),
+        scored(id="L0004", pilot="Beat", score=100, touchdown_utc="2026-09-13T12:10:00+00:00"),
+        scored(id="L0005", pilot="Cla", score=87, touchdown_utc="2026-09-13T12:50:00+00:00"),
+        scored(id="L0006", pilot="Cla", score=88, touchdown_utc="2026-09-13T13:00:00+00:00"),
+    ]
+    added = ranking.rank(landings, scoring.ScoringRules(aggregate=scoring.SUM))
+    assert [(g.name, g.total) for g in added.ranked] == [
+        ("Anna", 265),
+        ("Cla", 175),
+        ("Beat", 100),
+    ]
+    # the mean is rounded like a score: 87.5 -> 88 ties with Anna's 88.33 -> 88,
+    # and the tie goes to the pilot with more landings
+    mean = ranking.rank(landings, scoring.ScoringRules(aggregate=scoring.MEAN))
+    assert [(g.name, g.total) for g in mean.ranked] == [
+        ("Beat", 100),
+        ("Anna", 88),
+        ("Cla", 88),
+    ]
+    one = ranking.rank(landings, scoring.ScoringRules(aggregate=scoring.MEAN, decimals=1))
+    assert [(g.name, g.total) for g in one.ranked] == [
+        ("Beat", 100),
+        ("Anna", 88.3),
+        ("Cla", 87.5),
+    ]
+
+
+def test_ranking_mode_is_saved_and_reaches_the_files(client: TestClient) -> None:
+    r = client.post("/api/scoring", json={"aggregate": "mean"})
+    assert r.status_code == 200 and r.json()["aggregate"] == "mean"
+    assert client.get("/api/scoring").json()["aggregate"] == "mean"
+    assert client.get("/api/public/board").json()["rules"]["aggregate"] == "mean"
+    assert client.post("/api/scoring", json={"aggregate": "median"}).status_code == 422
+    import io
+    import zipfile
+
+    r = client.get("/api/landings/2026-09-13/ranking.xlsx")
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        sheet = zf.read("xl/worksheets/sheet1.xml").decode()
+    assert ">Mean<" in sheet and ">Total<" not in sheet
+
+
 def test_ranking_files_are_written_and_kept_current(client: TestClient, tmp_path: Path) -> None:
     import zipfile
 
@@ -840,7 +888,7 @@ def test_public_board_shows_only_what_the_board_draws(client: TestClient) -> Non
     board = client.get("/api/public/board").json()
     # the newest session, the rules the board needs, the landings - nothing else
     assert board["session"] == "2026-09-13"
-    assert set(board["rules"]) == {"name", "max_points", "decimals"}
+    assert set(board["rules"]) == {"name", "max_points", "decimals", "aggregate"}
     # the rolling aircraft (a pass) is not on the board
     assert [x["id"] for x in board["landings"]] == ["L0001"]
     only = board["landings"][0]

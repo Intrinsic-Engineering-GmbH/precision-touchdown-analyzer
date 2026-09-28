@@ -184,7 +184,7 @@ document.documentElement.dataset.layout = chosenLayout();
     <h2>Results <span id="resultsCount"></span></h2>
     <div class="rows" id="resultsBox">
       <table>
-        <thead><tr><th class="num">#</th><th>Pilot</th><th class="num">Landings</th><th>Each landing</th><th class="num">Total</th></tr></thead>
+        <thead><tr><th class="num">#</th><th>Pilot</th><th class="num">Landings</th><th>Each landing</th><th class="num" id="totalHead">Total</th></tr></thead>
         <tbody id="results"></tbody>
       </table>
       <div class="empty" id="resultsEmpty" hidden>No confirmed landings yet.</div>
@@ -273,7 +273,8 @@ const sessionTitle = s => {
   return isNaN(d) ? s : d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 };
 
-// Each pilot's confirmed landings summed up, best total first; the unverified
+// Each pilot's confirmed landings added up or averaged (the rules say which),
+// best result first; the mean is rounded like a score, so equal numbers tie. The unverified
 // landings one by one in order of touchdown. The pilot is what the judge
 // typed; a landing without one falls back to the aircraft, and one without
 // either stands alone.
@@ -287,11 +288,16 @@ function split() {
     if (!groups.has(key)) groups.set(key, { key, name: pilot || l.registration || "unknown", pilot, aircraft: [], landings: [], total: 0 });
     const g = groups.get(key);
     g.landings.push(l);
-    g.total += l.score ?? 0;
     if (pilot) g.name = pilot;  // the spelling of the latest entry
     const craft = [l.registration, l.competition_number].filter(Boolean).join(" ");
     if (craft && !g.aircraft.includes(craft)) g.aircraft.push(craft);
     if (!pilot && !g.aircraft.length && l.aircraft_type) g.aircraft.push(l.aircraft_type);
+  }
+  const mean = rules && rules.aggregate === "mean";
+  const places = rules ? rules.decimals : 0;
+  for (const g of groups.values()) {
+    const sum = g.landings.reduce((s, l) => s + (l.score ?? 0), 0);
+    g.total = mean ? Number((sum / g.landings.length).toFixed(places)) : sum;
   }
   const ranked = [...groups.values()].sort((a, b) => b.total - a.total || b.landings.length - a.landings.length || a.name.localeCompare(b.name));
   const pending = shown.filter(l => l.status !== "confirmed").sort(byTime);
@@ -400,7 +406,9 @@ async function refresh() {
         : `/api/landings/${encodeURIComponent(session)}/ranking.${ext}`;
       $(id).hidden = !session || (PUBLIC && ext === "xlsx");
     }
-    $("rules").textContent = rules ? `${rules.name || "scoring"} · ${rules.max_points} pts on the line` : "";
+    const mean = rules && rules.aggregate === "mean";
+    $("rules").textContent = rules ? `${rules.name || "scoring"} · ${rules.max_points} pts on the line${mean ? " · mean of the landings" : ""}` : "";
+    $("totalHead").textContent = mean ? "Mean" : "Total";
     failures = 0;
   } catch (e) {
     // keep showing what we had; the dot goes red below

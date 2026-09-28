@@ -140,6 +140,10 @@ tr.line td { font-weight:600; color:var(--amber); }
       <div><label for="min">Minimum points for a measured landing</label><input id="min" type="number" step="1"></div>
       <div><label for="oor">Points for a landing outside the window</label><input id="oor" type="number" step="1"></div>
       <div><label for="dec">Decimals</label><select id="dec"><option value="0">0</option><option value="1">1</option><option value="2">2</option></select></div>
+      <div class="wide"><label for="agg">A pilot who lands more than once is ranked by</label><select id="agg">
+        <option value="sum">the sum of their landings (every landing adds points)</option>
+        <option value="mean">the mean of their landings (flying more often is no advantage)</option>
+      </select></div>
     </div>
     <div class="row">
       <button id="save">Save rules</button>
@@ -152,7 +156,8 @@ tr.line td { font-weight:600; color:var(--amber); }
       how far the wheel stopped short of the <i>edge</i> of the line: the line is painted with a width, and
       touching down anywhere on it earns everything. A width of 0 makes the line infinitely thin. Short and long
       have their own deduction because a landing short of the line is usually punished harder than one
-      beyond it. Take-offs, fly-throughs and rejected events earn nothing.
+      beyond it. Take-offs, fly-throughs and rejected events earn nothing. A pilot's result on the board is
+      their confirmed landings added up, or their mean (rounded like a score).
     </p>
   </section>
 
@@ -202,12 +207,14 @@ function formRules() {
     short_per_m: Number($("short").value),
     long_per_m: Number($("long").value), min_points: Number($("min").value),
     out_of_range_points: Number($("oor").value), decimals: Number($("dec").value),
+    aggregate: $("agg").value,
   };
 }
 function fillForm(r) {
   $("name").value = r.name; $("max").value = r.max_points; $("width").value = r.target_width_m;
   $("short").value = r.short_per_m; $("long").value = r.long_per_m;
   $("min").value = r.min_points; $("oor").value = r.out_of_range_points; $("dec").value = String(r.decimals);
+  $("agg").value = r.aggregate || "sum";
 }
 const halfWidth = r => Math.max(0, r.target_width_m || 0) / 2;
 function score(r, offset) {

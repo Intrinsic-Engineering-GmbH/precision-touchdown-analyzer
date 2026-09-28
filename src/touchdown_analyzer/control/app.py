@@ -15,7 +15,7 @@ import contextlib
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -137,6 +137,7 @@ class ScoringRequest(BaseModel):
     out_of_range_points: float = 0.0
     decimals: int = Field(default=0, ge=0, le=3)
     name: str = "Club rules"
+    aggregate: Literal["sum", "mean"] = "sum"
 
 
 class FieldRequest(BaseModel):

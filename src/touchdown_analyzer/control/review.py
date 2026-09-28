@@ -732,6 +732,8 @@ class ReviewService:
             raise ServiceError(f"bad scoring rules: {exc}") from exc
         if rules.max_points <= 0 or rules.short_per_m < 0 or rules.long_per_m < 0:
             raise ServiceError("points must be positive and deductions not negative")
+        if rules.aggregate not in scoring.AGGREGATES:
+            raise ServiceError(f"aggregate must be one of {', '.join(scoring.AGGREGATES)}")
         self.rules = rules
         scoring.save(self.config_dir, rules)
         return rules.as_dict()
@@ -784,7 +786,12 @@ PUBLIC_LANDING_FIELDS = (
 
 
 def _public_rules(rules: scoring.ScoringRules) -> dict[str, Any]:
-    return {"name": rules.name, "max_points": rules.max_points, "decimals": rules.decimals}
+    return {
+        "name": rules.name,
+        "max_points": rules.max_points,
+        "decimals": rules.decimals,
+        "aggregate": rules.aggregate,
+    }
 
 
 def _pass_spans(landing: Landing, segments: list[dict[str, Any]]) -> list[dict[str, Any]]:

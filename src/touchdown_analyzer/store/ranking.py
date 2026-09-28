@@ -5,8 +5,8 @@ pilot named, the rules edited, a new landing from the analyser - refreshes
 ``ranking.xlsx`` and ``ranking.pdf`` next to the session's ``landings.json``
 (:meth:`ReviewService.export`), so the sheet the organiser hands out is never
 behind the screen. The grouping and order here mirror ``board.html``: a
-pilot's confirmed landings added up, best total first, then the landings
-still waiting for the judge.
+pilot's confirmed landings added up or averaged (the rules say which), best
+result first, then the landings still waiting for the judge.
 
 Both files are produced without libraries: a .xlsx is a zip of XML parts,
 and a table of text in Helvetica is a few hundred lines of PDF. That keeps
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
-from touchdown_analyzer.store.scoring import ScoringRules
+from touchdown_analyzer.store.scoring import MEAN, ScoringRules
 
 XLSX_NAME = "ranking.xlsx"
 PDF_NAME = "ranking.pdf"
@@ -56,13 +56,15 @@ def _when(landing: dict[str, Any]) -> str:
     return landing.get("touchdown_utc") or landing.get("first_utc") or ""
 
 
-def rank(landings: list[dict[str, Any]]) -> Ranking:
+def rank(landings: list[dict[str, Any]], rules: ScoringRules | None = None) -> Ranking:
     """Group and order scored landings the way the board does.
 
     Rejected entries and anything that is not a landing are left out. The
     pilot is what the judge typed; a landing without one falls back to the
-    aircraft, and one without either stands alone.
+    aircraft, and one without either stands alone. A group's ``total`` is
+    its landings combined as the rules say - added up, or their mean.
     """
+    rules = rules or ScoringRules()
     shown = [x for x in landings if x.get("kind") == "landing" and x.get("status") != "rejected"]
     groups: dict[str, Group] = {}
     for x in sorted((x for x in shown if x.get("status") == "confirmed"), key=_when):
@@ -78,7 +80,6 @@ def rank(landings: list[dict[str, Any]]) -> Ranking:
         if group is None:
             group = groups[key] = Group(key, pilot or registration or "unknown", pilot)
         group.landings.append(x)
-        group.total += x.get("score") or 0
         if pilot:
             group.name = pilot  # the spelling of the latest entry
         craft = " ".join(s for s in (registration, x.get("competition_number")) if s)
@@ -86,6 +87,8 @@ def rank(landings: list[dict[str, Any]]) -> Ranking:
             group.aircraft.append(craft)
         if not pilot and not group.aircraft and x.get("aircraft_type"):
             group.aircraft.append(x["aircraft_type"])
+    for group in groups.values():
+        group.total = rules.combine([x.get("score") for x in group.landings])
     ranked = sorted(groups.values(), key=lambda g: (-g.total, -len(g.landings), g.name.casefold()))
     pending = sorted((x for x in shown if x.get("status") != "confirmed"), key=_when)
     return Ranking(ranked, pending)
@@ -135,6 +138,12 @@ def rules_text(rules: ScoringRules) -> str:
         f"-{rules.short_per_m:g}/m short, -{rules.long_per_m:g}/m long, "
         f"floor {rules.min_points:g}, outside the window {rules.out_of_range_points:g}"
     )
+
+
+def aggregate_text(rules: ScoringRules) -> str:
+    if rules.aggregate == MEAN:
+        return "Mean = the points of the pilot's confirmed landings averaged."
+    return "Total = the points of all confirmed landings of the pilot added up."
 
 
 # -- Excel --------------------------------------------------------------------
@@ -233,6 +242,7 @@ def _heading_rows(session: str, rules: ScoringRules, ranking: Ranking) -> list[l
         [("Live Ranking", TITLE)],
         [(session_title(session), BOLD)],
         [(rules_text(rules), PLAIN)],
+        [(aggregate_text(rules), PLAIN)],
         [
             (
                 f"{ranking.confirmed} confirmed landings, {len(ranking.ranked)} pilots, "
@@ -248,7 +258,9 @@ def _heading_rows(session: str, rules: ScoringRules, ranking: Ranking) -> list[l
 def _ranking_sheet(ranking: Ranking, session: str, rules: ScoringRules) -> str:
     n = _number_style(rules)
     rows = _heading_rows(session, rules, ranking)
-    rows.append([(h, BOLD) for h in ("Rank", "Pilot", "Aircraft", "Landings", "Total")])
+    rows.append(
+        [(h, BOLD) for h in ("Rank", "Pilot", "Aircraft", "Landings", rules.aggregate_label)]
+    )
     for i, g in enumerate(ranking.ranked, start=1):
         rows.append(
             [
@@ -537,6 +549,7 @@ def write_pdf(path: Path, ranking: Ranking, session: str, rules: ScoringRules) -
         f"Live Ranking - {session_title(session)}",
         [
             rules_text(rules),
+            aggregate_text(rules),
             f"{ranking.confirmed} confirmed landings, {len(ranking.ranked)} pilots, "
             f"{len(ranking.pending)} awaiting the judge - written {stamp}",
         ],
@@ -552,7 +565,7 @@ def write_pdf(path: Path, ranking: Ranking, session: str, rules: ScoringRules) -
             _Column("Aircraft", 110),
             _Column("Landings", 50, "right"),
             _Column("Each landing", 150),
-            _Column("Total", 46, "right"),
+            _Column(rules.aggregate_label, 46, "right"),
         ]
         rows = []
         for i, g in enumerate(ranking.ranked, start=1):
@@ -628,7 +641,7 @@ def write_pdf(path: Path, ranking: Ranking, session: str, rules: ScoringRules) -
         doc.table(columns, rows)
 
     doc.y -= 6
-    doc.paragraph("Total = the points of all confirmed landings of the pilot added up.", 8)
+    doc.paragraph(aggregate_text(rules), 8)
     doc.paragraph("Offset from the target line: - short, + long.", 8)
 
     tmp = path.with_suffix(".pdf.tmp")
@@ -644,7 +657,7 @@ def export(
 ) -> tuple[Path, Path]:
     """Write ``ranking.xlsx`` and ``ranking.pdf`` into ``directory``."""
     directory.mkdir(parents=True, exist_ok=True)
-    ranking = rank(landings)
+    ranking = rank(landings, rules)
     xlsx, pdf = directory / XLSX_NAME, directory / PDF_NAME
     write_xlsx(xlsx, ranking, session, rules)
     write_pdf(pdf, ranking, session, rules)

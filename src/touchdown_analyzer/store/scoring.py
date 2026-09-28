@@ -4,9 +4,10 @@ The rules are the club's, not the software's: the full score on the target
 line, the width of that line (it is painted, not infinitely thin, so there
 is a band around it that still earns everything), a deduction per metre
 short and a different one per metre long (a short landing is usually
-punished harder), a floor, and what a landing outside the measurement
-window gets. They live in ``config/scoring.json`` and are edited from the
-Scoring page.
+punished harder), a floor, what a landing outside the measurement
+window gets, and how a pilot's landings make one result: added up, or
+their mean, so flying more often is no advantage. They live in
+``config/scoring.json`` and are edited from the Scoring page.
 """
 
 from __future__ import annotations
@@ -21,6 +22,11 @@ log = logging.getLogger(__name__)
 
 CONFIG_NAME = "scoring.json"
 
+# How a pilot's confirmed landings are combined into the result that ranks them.
+SUM = "sum"
+MEAN = "mean"
+AGGREGATES = (SUM, MEAN)
+
 
 @dataclass(slots=True)
 class ScoringRules:
@@ -32,6 +38,7 @@ class ScoringRules:
     out_of_range_points: float = 0.0  # a landing outside the window (< / > bound)
     decimals: int = 0  # how the score is rounded
     name: str = "Club rules"
+    aggregate: str = SUM  # a pilot's landings added up (sum) or averaged (mean)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +55,23 @@ class ScoringRules:
         deduction is measured from the edge of the line, not its centre.
         """
         return max(0.0, abs(longitudinal_m) - self.target_half_width_m)
+
+    @property
+    def aggregate_label(self) -> str:
+        """The heading of the result column: ``Total`` or ``Mean``."""
+        return "Mean" if self.aggregate == MEAN else "Total"
+
+    def combine(self, scores: list[float | None]) -> float:
+        """A pilot's result from the points of their confirmed landings.
+
+        A landing not scored (``None``) counts 0, as on the board. The mean is
+        rounded like a single score, so two pilots shown with the same result
+        are tied, not ranked apart by a hidden fraction.
+        """
+        points = [s or 0.0 for s in scores]
+        if self.aggregate == MEAN:
+            return round(sum(points) / len(points), self.decimals) if points else 0.0
+        return sum(points)
 
     def score(self, longitudinal_m: float | None, outcome: str) -> float | None:
         """Points for one landing, or ``None`` when it is not scored at all.
