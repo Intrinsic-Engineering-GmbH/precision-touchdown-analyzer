@@ -65,7 +65,14 @@ def capture_sample(
         cmd += [ff.socket_timeout_flag(ffmpeg), "5000000"]
     cmd += ["-i", source, "-an", "-c", "copy", "-t", str(seconds), str(destination)]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 60, check=False)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=seconds + 60,
+        check=False,
+        creationflags=ff.NO_WINDOW,
+    )
     if result.returncode != 0 or not destination.is_file():
         raise ff.ProbeError(result.stderr.strip() or "ffmpeg failed to capture a sample")
 

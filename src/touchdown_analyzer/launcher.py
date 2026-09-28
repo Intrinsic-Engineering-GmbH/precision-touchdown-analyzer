@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from touchdown_analyzer import __version__, config, paths
+from touchdown_analyzer import __version__, config, paths, settings_file
 from touchdown_analyzer.control import relay
 
 DEFAULT_PORT = int(os.environ.get("TOUCHDOWN_ANALYZER_PORT", "8080") or 8080)
@@ -220,13 +220,18 @@ def run() -> int:
     url_label = ttk.Label(box, text="", style="Muted.TLabel")
     url_label.grid(row=1, column=0, columnspan=6, sticky="w", pady=(6, 0))
     buttons = ttk.Frame(box)
-    buttons.grid(row=2, column=0, columnspan=6, sticky="w", pady=(8, 0))
+    buttons.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(8, 0))
     start_btn = ttk.Button(buttons, text="Start")
     stop_btn = ttk.Button(buttons, text="Stop", state="disabled")
     open_btn = ttk.Button(buttons, text="Open in browser", state="disabled")
     start_btn.pack(side="left")
     stop_btn.pack(side="left", padx=6)
     open_btn.pack(side="left")
+    # the site's settings as one .pta file (settings_file.py)
+    import_btn = ttk.Button(buttons, text="Import settings…")
+    export_btn = ttk.Button(buttons, text="Export settings…")
+    import_btn.pack(side="right")
+    export_btn.pack(side="right", padx=6)
 
     # -- folders ------------------------------------------------------------------
     # Where the recordings and the results go. Read when the server starts,
@@ -391,7 +396,7 @@ def run() -> int:
         stop_btn.configure(state="normal" if running else "disabled")
         open_btn.configure(state="normal" if running else "disabled")
         url_label.configure(text=server.url if running else "")
-        for widget in [*folder_widgets, relay_url_entry, relay_token_entry]:
+        for widget in [*folder_widgets, relay_url_entry, relay_token_entry, import_btn]:
             widget.configure(state="disabled" if running else "normal")
 
     def read_folders() -> tuple[Path, Path] | None:
@@ -527,6 +532,70 @@ def run() -> int:
     lookup_btn.configure(command=lookup)
     icao_entry.bind("<Return>", lambda _event: lookup())
     save_field_btn.configure(command=save_field)
+
+    # -- settings file ------------------------------------------------------------
+    from tkinter import messagebox
+
+    def export_settings() -> None:
+        name = f"PTA-{field.airfield or 'site'}-{datetime.now():%Y-%m-%d}{settings_file.SUFFIX}"
+        chosen = filedialog.asksaveasfilename(
+            parent=root,
+            title="Export settings",
+            initialfile=name,
+            defaultextension=settings_file.SUFFIX,
+            filetypes=[("PTA settings", f"*{settings_file.SUFFIX}")],
+        )
+        if not chosen:
+            return
+        try:
+            names = settings_file.export_settings(home, Path(chosen))
+        except OSError as exc:
+            log(f"[could not export the settings: {exc}]")
+            return
+        log(f"[settings exported to {chosen}: {', '.join(names) or 'nothing set yet'}]")
+        log("[it holds the camera password and the relay token - keep it safe]")
+
+    def import_settings() -> None:
+        nonlocal field
+        chosen = filedialog.askopenfilename(
+            parent=root,
+            title="Import settings",
+            filetypes=[("PTA settings", f"*{settings_file.SUFFIX}"), ("All files", "*.*")],
+        )
+        if not chosen:
+            return
+        try:
+            files, env = settings_file.read_settings(Path(chosen))
+        except settings_file.SettingsFileError as exc:
+            messagebox.showerror("Import settings", str(exc), parent=root)
+            return
+        listed = "\n".join([*(f"  config/{n}" for n in files), *(f"  {k}" for k in env)])
+        if not messagebox.askyesno(
+            "Import settings",
+            f"Replace these settings with those from {Path(chosen).name}?\n\n{listed}\n\n"
+            f"The current ones are kept in the folder {settings_file.BACKUP_DIR} first.",
+            parent=root,
+        ):
+            return
+        try:
+            changed, backup = settings_file.import_settings(home, Path(chosen))
+        except (OSError, settings_file.SettingsFileError) as exc:
+            log(f"[could not import the settings: {exc}]")
+            return
+        # show what is now in effect
+        raw, results = load_folders(home)
+        folder_vars["raw"].set(str(raw))
+        folder_vars["results"].set(str(results))
+        field = ogn.load_field(home / "config")
+        show_field(field)
+        relay_url_var.set(config.saved_value(relay.URL_KEY, env_file) or "")
+        relay_token_var.set(config.saved_value(relay.TOKEN_KEY, env_file) or "")
+        field_status.configure(text="")
+        log(f"[settings imported from {chosen}: {', '.join(changed)}]")
+        log(f"[the settings before are in {backup}]")
+
+    export_btn.configure(command=export_settings)
+    import_btn.configure(command=import_settings)
 
     def fmt(label: ttk.Label, badge: ttk.Label, value: str, ok: bool | None) -> None:
         label.configure(text=value)

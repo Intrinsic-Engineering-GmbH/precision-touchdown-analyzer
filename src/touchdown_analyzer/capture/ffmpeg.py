@@ -28,6 +28,10 @@ _INSTALL_HINT = (
 )
 
 _VERSION = re.compile(r"version\s+n?(\d+)\.")
+# For every ffmpeg / ffprobe started: on Windows the server runs without a
+# console, so each console program it starts would open one of its own,
+# flashing up on the screen. 0 (nothing) elsewhere.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class FfmpegNotFound(RuntimeError):
@@ -66,7 +70,12 @@ def tool_version(tool: str) -> str:
     """First line of ``<tool> -version``, or ``"unknown"``."""
     try:
         out = subprocess.run(
-            [tool, "-version"], capture_output=True, text=True, timeout=15, check=False
+            [tool, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError):
         return "unknown"
@@ -143,7 +152,14 @@ class StreamInfo:
 def _run_ffprobe(ffprobe: str, args: list[str], timeout: float) -> dict:
     cmd = [ffprobe, "-hide_banner", "-loglevel", "error", "-of", "json", *args]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        out = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            creationflags=NO_WINDOW,
+        )
     except subprocess.TimeoutExpired as exc:
         raise ProbeError(f"ffprobe timed out after {timeout:.0f}s") from exc
     except OSError as exc:

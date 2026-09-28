@@ -54,8 +54,12 @@ if (-not $NoFfmpeg) {
   # PyInstaller 6 puts data files under _internal\; paths.bundled_tool looks there too.
   $bundled = Get-ChildItem $app -Recurse -Filter ffmpeg.exe | Select-Object -First 1
   if (-not $bundled) { throw "ffmpeg.exe is missing from the application folder" }
-  & $bundled.FullName -version | Select-Object -First 1
-  if ($LASTEXITCODE -ne 0) { throw "the bundled ffmpeg does not run" }
+  # all of the output first: cutting the pipe after one line (Select-Object
+  # -First 1) can end ffmpeg with an error while it is still writing
+  $version = & $bundled.FullName -version
+  $code = $LASTEXITCODE
+  $version | Select-Object -First 1
+  if ($code -ne 0) { throw "the bundled ffmpeg does not run" }
 }
 
 Write-Host "== app.zip"

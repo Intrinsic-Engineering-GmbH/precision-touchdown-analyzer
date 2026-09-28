@@ -80,7 +80,11 @@ class Preview:
     def __init__(self, cmd: list[str]) -> None:
         try:
             self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+                creationflags=ff.NO_WINDOW,
             )
         except OSError as exc:
             raise PreviewError(f"could not start ffmpeg: {exc}") from exc

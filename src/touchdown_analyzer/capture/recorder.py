@@ -274,6 +274,7 @@ def record(
                     stderr=errlog,
                     text=True,
                     bufsize=1,
+                    creationflags=ff.NO_WINDOW,
                 )
                 pump = threading.Thread(
                     target=_pump_progress,

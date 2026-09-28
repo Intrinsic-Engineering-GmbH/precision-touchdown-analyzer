@@ -48,7 +48,14 @@ class Window:
 
 def _run(cmd: list[str], timeout: float) -> None:
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            creationflags=ff.NO_WINDOW,
+        )
     except subprocess.TimeoutExpired as exc:
         raise FrameError(f"ffmpeg timed out after {timeout:.0f}s") from exc
     except OSError as exc:

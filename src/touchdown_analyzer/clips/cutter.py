@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from touchdown_analyzer.capture.ffmpeg import NO_WINDOW
+
 PRE_ROLL_S = 3.0
 POST_ROLL_S = 5.0
 # Before the wheel enters the measuring window, and after it leaves it.
@@ -81,7 +83,14 @@ def cut(
     cmd += ["-t", f"{duration:.3f}", "-c", "copy", "-movflags", "+faststart", str(destination)]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            creationflags=NO_WINDOW,
+        )
     except subprocess.TimeoutExpired as exc:
         raise ClipError(f"ffmpeg timed out after {timeout:.0f}s") from exc
     except OSError as exc:

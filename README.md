@@ -75,6 +75,15 @@ the services - recorder, analysis worker, OGN feed, calibration, public
 board, ffmpeg - with the server log underneath. From a checkout the same
 window is `touchdown-analyzer launcher`.
 
+*Export settings…* writes the site's settings to one `*.pta` file (a zip):
+calibration with its still, airfield, scoring rules, folders, the camera URL
+and the relay's address and token - everything in `config/` and the site's
+entries of `.env`, no recordings or results. *Import settings…* (with the
+server stopped) takes such a file over on another machine or after a
+reinstall; the settings it replaces go to `backups/` first, as a `.pta` to
+import back. The file holds the camera password and the relay token: keep it
+like a password.
+
 Without the window:
 
 ```powershell

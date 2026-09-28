@@ -73,6 +73,9 @@ ipython_config.py
 *.pem
 *.key
 secrets.*
+# exported site settings carry the camera password and the relay token
+*.pta
+/backups/
 
 # ---------------------------------------------------------------------------
 # Editors / IDEs
