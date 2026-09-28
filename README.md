@@ -15,6 +15,11 @@ in the browser.
 
 <img width="1689" height="951" alt="2026-09-14_13h38_17" src="https://github.com/user-attachments/assets/c2719deb-bfd8-4844-a5af-063067819b36" />
 
+<p align="center">
+  <img width="320" alt="The scoreboard's small display on a phone: pilots ranked by total points, each landing's time, offset and points, and the landings awaiting the judge" src="docs/images/board-mobile.png" />
+  <br><em>The small display of the board, as a phone shows the public scoreboard.</em>
+</p>
+
 
 ## Install
 
@@ -81,13 +86,8 @@ pushes the public board to the relay as well - the launcher writes them there.
 | **Frames** | Step through a segment frame by frame and hand-mark a touchdown (the ground truth the analysis is scored against). |
 | **Landings** | The judge's page: every event of the day with its measured offset, the contact frame with the geometry drawn on, a scrubber and loop, a magnifier, the OGN proposal, the pilot's name (suggested from the aircraft's previous landing), and *Confirm / Reject / Use this frame*. *Analyse session* processes a finished day; *Follow recording* analyses while recording. |
 | **Scoring** | The club's rules - points on the line, deduction per metre short and per metre long, floor, decimals - with the scale drawn out and the day's ranking. |
-| **Board** (`/board`) | Read-only results for a big screen: one row per pilot (the name the judge entered; the aircraft where none) with the number of confirmed landings, each landing's offset and points, and the total (points added up over all its landings) that ranks it; the unverified landings listed beside without distance or score; refreshed every 5 s, follows the newest session. `?session=2026-09-13`, `?theme=light`, `?refresh=10`, `?page=8` (seconds per page when the list is long). On a phone (narrower than 760 px), or with `?layout=mobile`, the small display: one column to scroll through instead of pages - see below; the button on the lower edge switches between the two. |
+| **Board** (`/board`) | Read-only results for a big screen: one row per pilot (the name the judge entered; the aircraft where none) with the number of confirmed landings, each landing's offset and points, and the total (points added up over all its landings) that ranks it; the unverified landings listed beside without distance or score; refreshed every 5 s, follows the newest session. `?session=2026-09-13`, `?theme=light`, `?refresh=10`, `?page=8` (seconds per page when the list is long). On a phone (narrower than 760 px), or with `?layout=mobile`, the small display: one column to scroll through instead of pages (the picture at the top); the button on the lower edge switches between the two. |
 | **Public board** (`/public`) | The same board for the internet, reading only `/api/public/board` (no tracks, notes or file paths) and offering the PDF. Put on the internet through the relay in [`ptp-relay/`](ptp-relay/README.md): the analyzer pushes the page, the boards and the ranking PDFs every few seconds to nginx in Docker on a Raspberry Pi, which serves them read-only and nothing else, shows the board at its root, and can add HTTPS with the certificate the domain's provider issues. The Pi never calls the judge PC - whose address may change, and which can stay on `127.0.0.1`. When the pushes stop, the board there says "not active" after 30 s. |
-
-<p align="center">
-  <img width="320" alt="The scoreboard's small display on a phone: pilots ranked by total points, each landing's time, offset and points, and the landings awaiting the judge" src="docs/images/board-mobile.png" />
-  <br><em>The small display of the board, as a phone shows the public scoreboard.</em>
-</p>
 
 The same things from the command line:
 
