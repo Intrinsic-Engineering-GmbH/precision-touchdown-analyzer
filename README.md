@@ -11,9 +11,15 @@ aircraft, tracks its wheel to the instant of contact and maps that pixel onto
 the ground plane through a one-time calibration. A judge confirms each landing
 in the browser.
 
-<img width="1427" height="1165" alt="image" src="https://github.com/user-attachments/assets/3756b6af-1bf5-4ca8-941b-10ab724513a6" />
+<p align="center">
+  <img width="1427" height="1165" alt="The judge's Landings page: the contact frame of a glider with the target line and the approach drawn in, the measured offset, lateral distance and ground speed, the OGN identification with registration and pilot to confirm, and the session's events with offset, points and status" src="https://github.com/user-attachments/assets/3756b6af-1bf5-4ca8-941b-10ab724513a6" />
+  <br><em>The judge's Landings page: the contact frame with the geometry drawn in, the measurement, the OGN proposal to confirm, and every event of the session.</em>
+</p>
 
-<img width="1689" height="951" alt="2026-09-14_13h38_17" src="https://github.com/user-attachments/assets/c2719deb-bfd8-4844-a5af-063067819b36" />
+<p align="center">
+  <img width="1688" height="950" alt="The results board for a big screen: pilots ranked by total points, with the number of landings and each landing's time, offset and points, and beside it the landings awaiting the judge" src="docs/images/board.png" />
+  <br><em>The results board for the big screen: pilots ranked by their total, each landing with its offset and points.</em>
+</p>
 
 <p align="center">
   <img width="320" alt="The scoreboard's small display on a phone: pilots ranked by total points, each landing's time, offset and points, and the landings awaiting the judge" src="docs/images/board-mobile.png" />
