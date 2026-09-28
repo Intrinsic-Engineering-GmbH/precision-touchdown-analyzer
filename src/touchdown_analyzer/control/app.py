@@ -10,6 +10,9 @@ credentials in it.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from touchdown_analyzer import __version__
 from touchdown_analyzer.capture.preview import BOUNDARY
+from touchdown_analyzer.control.relay import RelayPusher
 from touchdown_analyzer.control.review import ReviewService
 from touchdown_analyzer.control.service import CaptureService, ServiceError
 
@@ -146,8 +150,24 @@ class FieldRequest(BaseModel):
     timezone_offset_h: float = 2.0
 
 
-def create_app(service: CaptureService, review: ReviewService | None = None) -> FastAPI:
-    app = FastAPI(title="touchdown-analyzer capture control", version=__version__)
+def create_app(
+    service: CaptureService,
+    review: ReviewService | None = None,
+    relay: RelayPusher | None = None,
+) -> FastAPI:
+    @contextlib.asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # the public board goes to the relay for as long as the server runs
+        task = asyncio.create_task(relay.run()) if relay is not None else None
+        yield
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(
+        title="touchdown-analyzer capture control", version=__version__, lifespan=lifespan
+    )
     review = review or ReviewService(service)
 
     @app.exception_handler(ServiceError)
@@ -167,6 +187,7 @@ def create_app(service: CaptureService, review: ReviewService | None = None) -> 
         shown = ("running", "session", "stage", "done", "queue", "error")
         payload["analysis"] = {key: analysis.get(key) for key in shown}
         payload["analysis"]["auto_error"] = review.auto_error
+        payload["relay"] = relay.status() if relay is not None else None
         return payload
 
     @app.post("/api/record/start")
@@ -326,6 +347,29 @@ def create_app(service: CaptureService, review: ReviewService | None = None) -> 
     async def board_page() -> FileResponse:
         """The results for the big screen: read-only, refreshes itself."""
         return FileResponse(STATIC / "board.html")
+
+    # -- the public scoreboard: what goes to the relay on the internet ------------
+    # Read-only and slim: /public is the board page, which then asks only the
+    # two endpoints below. The relay gets the same, pushed (relay.py).
+
+    @app.get("/public", include_in_schema=False)
+    async def public_page() -> FileResponse:
+        return FileResponse(STATIC / "board.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/public/board")
+    async def public_board(session: str | None = None) -> dict[str, Any]:
+        try:
+            return review.public_board(session)
+        except ServiceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/public/ranking.pdf", include_in_schema=False)
+    async def public_ranking_pdf(session: str | None = None) -> FileResponse:
+        try:
+            chosen = review.public_session(session)
+        except ServiceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _ranking_file(chosen, 1, "application/pdf")
 
     @app.get("/api/scoring")
     async def scoring_rules() -> dict[str, Any]:
@@ -514,4 +558,7 @@ def serve(
 
     service = CaptureService(root, ffmpeg=ffmpeg, ffprobe=ffprobe)
     review = ReviewService(service, out_root=results)
-    uvicorn.run(create_app(service, review), host=host, port=port, log_level="warning")
+    relay = RelayPusher.from_env(review)
+    if relay is not None:
+        print(f"Public board pushed to the relay at {relay.url}", flush=True)
+    uvicorn.run(create_app(service, review, relay), host=host, port=port, log_level="warning")

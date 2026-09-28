@@ -84,8 +84,18 @@ def saved_source(env_file: Path | None = None) -> str | None:
     run. The file is ``.env`` because the URL carries the camera password:
     ``.env`` is git-ignored, ``config/`` is not.
     """
+    return saved_value(SOURCE_KEY, env_file)
+
+
+def remember_source(source: str, env_file: Path | None = None) -> Path:
+    """Write the camera URL to ``.env``, keeping every other line as it was."""
+    return remember_value(SOURCE_KEY, source, env_file)
+
+
+def saved_value(key: str, env_file: Path | None = None) -> str | None:
+    """A setting from the environment, else from ``.env``; ``None`` if unset."""
     env_file = env_file or ENV_FILE
-    value = os.environ.get(SOURCE_KEY, "").strip()
+    value = os.environ.get(key, "").strip()
     if value:
         return value
     if not env_file.is_file():
@@ -95,25 +105,25 @@ def saved_source(env_file: Path | None = None) -> str | None:
     except OSError:
         return None
     for line in lines:
-        key, _, raw = line.strip().partition("=")
-        if key.strip() == SOURCE_KEY:
+        name, _, raw = line.strip().partition("=")
+        if name.strip() == key:
             value = raw.strip().strip("\"'")
             return value or None
     return None
 
 
-def remember_source(source: str, env_file: Path | None = None) -> Path:
-    """Write the camera URL to ``.env``, keeping every other line as it was."""
+def remember_value(key: str, value: str, env_file: Path | None = None) -> Path:
+    """Write a setting to ``.env``, keeping every other line as it was."""
     env_file = env_file or ENV_FILE
-    entry = f"{SOURCE_KEY}={source.strip()}"
+    entry = f"{key}={value.strip()}"
     lines: list[str] = []
     if env_file.is_file():
         lines = env_file.read_text(encoding="utf-8-sig").splitlines()
 
     replaced = False
     for index, line in enumerate(lines):
-        key = line.strip().partition("=")[0].strip()
-        if key == SOURCE_KEY or key == f"# {SOURCE_KEY}":
+        name = line.strip().partition("=")[0].strip()
+        if name == key or name == f"# {key}":
             lines[index] = entry
             replaced = True
             break

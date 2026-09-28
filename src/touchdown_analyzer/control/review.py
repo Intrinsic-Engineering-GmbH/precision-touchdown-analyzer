@@ -628,6 +628,40 @@ class ReviewService:
             reverse=True,
         )
 
+    def public_session(self, session: str | None) -> str:
+        """A session the public may see: one with results; default the newest.
+
+        The name comes from the internet, so it is looked up, never joined
+        onto a path.
+        """
+        known = self.sessions_with_results()
+        if session is None:
+            if not known:
+                raise ServiceError("no results yet")
+            return known[0]
+        if session not in known:
+            raise ServiceError(f"no results for {session}")
+        return session
+
+    def public_board(self, session: str | None = None) -> dict[str, Any]:
+        """What the public scoreboard shows, and nothing more.
+
+        No tracks, notes, history, OGN data or file paths: only the landings
+        on the board, with the fields the board draws.
+        """
+        try:
+            session = self.public_session(session)
+        except ServiceError:
+            if session is not None:
+                raise
+            return {"session": "", "rules": _public_rules(self.rules), "landings": []}
+        landings = [
+            {key: payload.get(key) for key in PUBLIC_LANDING_FIELDS}
+            for payload in (self.scored(x) for x in self.store(session).all())
+            if payload["kind"] == "landing" and payload["status"] != store_mod.REJECTED
+        ]
+        return {"session": session, "rules": _public_rules(self.rules), "landings": landings}
+
     def summary(self, session: str) -> dict[str, Any]:
         items = self.store(session).all()
         self.export(session)
@@ -729,6 +763,28 @@ def _set_registration(landing: Landing, registration: str, *, by: str) -> bool:
     landing.competition_number = (seen or {}).get("competition_number") or ""
     landing.aircraft_type = (seen or {}).get("aircraft_type") or ""
     return True
+
+
+# The fields of a landing the public scoreboard draws (board.html).
+PUBLIC_LANDING_FIELDS = (
+    "id",
+    "kind",
+    "status",
+    "outcome",
+    "label",
+    "score",
+    "scored_longitudinal_m",
+    "touchdown_utc",
+    "first_utc",
+    "pilot",
+    "registration",
+    "competition_number",
+    "aircraft_type",
+)
+
+
+def _public_rules(rules: scoring.ScoringRules) -> dict[str, Any]:
+    return {"name": rules.name, "max_points": rules.max_points, "decimals": rules.decimals}
 
 
 def _pass_spans(landing: Landing, segments: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -1,0 +1,3 @@
+# the certificate with its private key, and the settings, stay on the Pi
+certs/
+.env

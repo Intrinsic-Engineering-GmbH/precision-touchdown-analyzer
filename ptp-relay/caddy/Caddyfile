@@ -1,0 +1,21 @@
+# HTTPS in front of the relay (see ../README.md).
+#
+# The certificate comes from a file: the one the DNS / hosting provider issues
+# and renews for PUBLIC_HOST, downloaded as certs/certificate.pfx and unpacked
+# by reload-cert.sh (cron) into certs/certificate.pem - certificate,
+# intermediate and private key. Caddy asks no CA for anything and needs no
+# port 80 / 443 - only the one port the router forwards (HTTPS_PORT).
+
+{
+	# certificates from the file only; no http:// listener for redirects
+	auto_https disable_redirects
+}
+
+https://{$PUBLIC_HOST} {
+	tls /certs/certificate.pem /certs/certificate.pem
+	encode gzip
+	header Strict-Transport-Security "max-age=31536000"
+	# the relay decides what is public; Caddy only adds TLS (and passes the
+	# viewer's address on in X-Forwarded-For)
+	reverse_proxy relay:8080
+}

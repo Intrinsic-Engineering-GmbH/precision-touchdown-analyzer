@@ -54,12 +54,15 @@ pip install -e ".[ui,analysis]"
 ## Run
 
 The installed program opens a **control window**: start and stop the web
-server, choose the port and whether a internet access is available, set the
-airfield for OGN identification (type the ICAO code, *Look up* fetches
-position, elevation and time zone from the OGN FlightBook, *Save* writes
-`config/ogn.json` and hands it to the running server), and watch the services -
-recorder, analysis worker, OGN feed, calibration, ffmpeg - with the server log
-underneath. From a checkout the same window is `touchdown-analyzer launcher`.
+server, choose the port and whether it is reachable from other devices on the
+network, set the airfield for OGN identification (type the ICAO code, *Look
+up* fetches position, elevation and time zone from the OGN FlightBook, *Save*
+writes `config/ogn.json` and hands it to the running server), name the relay
+the public scoreboard is pushed to (*Public scoreboard*: the Raspberry Pi's
+push port and its token, see [`ptp-relay/`](ptp-relay/README.md)), and watch
+the services - recorder, analysis worker, OGN feed, calibration, public
+board, ffmpeg - with the server log underneath. From a checkout the same
+window is `touchdown-analyzer launcher`.
 
 Without the window:
 
@@ -68,6 +71,9 @@ touchdown-analyzer serve            # http://localhost:8080
 touchdown-analyzer serve --host 0.0.0.0   # reachable from the field WiFi (no login - trusted networks only)
 ```
 
+With `RELAY_URL` and `RELAY_TOKEN` in `.env` (or the environment) the server
+pushes the public board to the relay as well - the launcher writes them there.
+
 | Program | Description |
 | --- | --- |
 | **Calibration** | Once per camera position: grab a still, click the surveyed markers (three pairs, one on each strip edge), solve. Aim for a residual under 0.10 m. |
@@ -75,7 +81,13 @@ touchdown-analyzer serve --host 0.0.0.0   # reachable from the field WiFi (no lo
 | **Frames** | Step through a segment frame by frame and hand-mark a touchdown (the ground truth the analysis is scored against). |
 | **Landings** | The judge's page: every event of the day with its measured offset, the contact frame with the geometry drawn on, a scrubber and loop, a magnifier, the OGN proposal, the pilot's name (suggested from the aircraft's previous landing), and *Confirm / Reject / Use this frame*. *Analyse session* processes a finished day; *Follow recording* analyses while recording. |
 | **Scoring** | The club's rules - points on the line, deduction per metre short and per metre long, floor, decimals - with the scale drawn out and the day's ranking. |
-| **Board** (`/board`) | Read-only results for a big screen: one row per pilot (the name the judge entered; the aircraft where none) with the number of confirmed landings, each landing's offset and points, and the total (points added up over all its landings) that ranks it; the unverified landings listed beside without distance or score; refreshed every 5 s, follows the newest session. `?session=2026-09-13`, `?theme=light`, `?refresh=10`, `?page=8` (seconds per page when the list is long). |
+| **Board** (`/board`) | Read-only results for a big screen: one row per pilot (the name the judge entered; the aircraft where none) with the number of confirmed landings, each landing's offset and points, and the total (points added up over all its landings) that ranks it; the unverified landings listed beside without distance or score; refreshed every 5 s, follows the newest session. `?session=2026-09-13`, `?theme=light`, `?refresh=10`, `?page=8` (seconds per page when the list is long). On a phone (narrower than 760 px), or with `?layout=mobile`, the small display: one column to scroll through instead of pages - see below; the button on the lower edge switches between the two. |
+| **Public board** (`/public`) | The same board for the internet, reading only `/api/public/board` (no tracks, notes or file paths) and offering the PDF. Put on the internet through the relay in [`ptp-relay/`](ptp-relay/README.md): the analyzer pushes the page, the boards and the ranking PDFs every few seconds to nginx in Docker on a Raspberry Pi, which serves them read-only and nothing else, shows the board at its root, and can add HTTPS with the certificate the domain's provider issues. The Pi never calls the judge PC - whose address may change, and which can stay on `127.0.0.1`. When the pushes stop, the board there says "not active" after 30 s. |
+
+<p align="center">
+  <img width="320" alt="The scoreboard's small display on a phone: pilots ranked by total points, each landing's time, offset and points, and the landings awaiting the judge" src="docs/images/board-mobile.png" />
+  <br><em>The small display of the board, as a phone shows the public scoreboard.</em>
+</p>
 
 The same things from the command line:
 
@@ -87,7 +99,8 @@ touchdown-analyzer analyze --session 2026-09-13 [--fresh] [--no-clips]
 ```
 
 The camera URL is given once with `--source` (or in the UI) and remembered in
-`.env`, which is git-ignored because it carries the camera password.
+`.env`, which is git-ignored because it carries the camera password. The
+relay's address and push token (`RELAY_URL`, `RELAY_TOKEN`) are kept there too.
 
 ## What comes out as results
 

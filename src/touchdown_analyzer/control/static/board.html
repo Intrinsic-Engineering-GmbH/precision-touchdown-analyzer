@@ -77,6 +77,59 @@ footer .corner a, footer .corner button { font:inherit; color:var(--muted); back
        border-radius:.5em; padding:.3em .8em; cursor:pointer; text-decoration:none; }
 footer .corner .theme { line-height:1; }
 body.asleep { cursor:none; }
+/* the analyzer is not running: the whole screen says so, until it is back */
+.offline { position:fixed; inset:0; z-index:10; background:var(--bg); display:flex; flex-direction:column;
+           align-items:center; justify-content:center; gap:calc(2 * var(--u)); text-align:center; padding:calc(4 * var(--u)); }
+.offline svg { width:calc(16 * var(--u)); height:calc(16 * var(--u)); }
+.offline .name { font-size:calc(2.6 * var(--u)); font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+.offline .state { font-size:calc(7 * var(--u)); font-weight:800; letter-spacing:-.01em; line-height:1.1; }
+.offline .state i { display:inline-block; width:.35em; height:.35em; border-radius:50%; background:var(--fail);
+                    vertical-align:middle; margin-right:.35em; }
+.offline .note { font-size:calc(2.4 * var(--u)); color:var(--muted); max-width:46em; }
+
+/* The mobile layout - a phone in the hand, not a screen across the hangar:
+   one column that scrolls instead of turning pages, each pilot a card, fixed
+   type sizes, and the switches always at hand on the lower edge. Chosen by
+   the screen's width, or by the "mobile" / "desktop" button (data-layout). */
+:root[data-layout="small"] { --u: 7.5px; }
+:root[data-layout="small"], :root[data-layout="small"] body { height:auto; }
+:root[data-layout="small"] body { overflow:auto; }
+:root[data-layout="small"] body.asleep { cursor:auto; }
+:root[data-layout="small"] .board { height:auto; min-height:100%; gap:12px;
+         padding:12px 12px calc(64px + env(safe-area-inset-bottom)); }
+:root[data-layout="small"] header { flex-wrap:wrap; gap:10px; }
+:root[data-layout="small"] header svg { width:40px; height:40px; }
+:root[data-layout="small"] header .name { font-size:11px; }
+:root[data-layout="small"] header .session { font-size:21px; }
+:root[data-layout="small"] header .right { margin-left:0; width:100%; text-align:left; display:flex; flex-wrap:wrap;
+         justify-content:space-between; align-items:baseline; gap:4px 12px; }
+:root[data-layout="small"] header .live { margin-top:0; }
+:root[data-layout="small"] main { display:flex; flex-direction:column; gap:12px; }
+:root[data-layout="small"] section { padding:12px; border-radius:10px; }
+:root[data-layout="small"] .rows { overflow:visible; }
+:root[data-layout="small"] .pages { display:none; }
+:root[data-layout="small"] th, :root[data-layout="small"] td { white-space:normal; }
+/* a ranked pilot: rank, name and total on one line, the landings below */
+:root[data-layout="small"] #resultsBox thead { display:none; }
+:root[data-layout="small"] #results tr { display:grid; grid-template-columns:2.2em minmax(0, 1fr) auto;
+         grid-template-areas:"rank who total" "rank each each";
+         gap:4px 8px; padding:10px 0; border-bottom:1px solid var(--line); }
+:root[data-layout="small"] #results tr:last-child { border-bottom:0; }
+:root[data-layout="small"] #results td { padding:0; border:0; }
+:root[data-layout="small"] #results td.rank { grid-area:rank; }
+:root[data-layout="small"] #results td.reg { grid-area:who; }
+:root[data-layout="small"] #results td.count { display:none; }
+:root[data-layout="small"] #results td.each { grid-area:each; }
+:root[data-layout="small"] #results td.points { grid-area:total; }
+:root[data-layout="small"] td.wait { font-size:12px; }
+/* the lower edge: a bar that stays, with the switches */
+:root[data-layout="small"] footer { position:fixed; left:0; right:0; bottom:0; z-index:5; background:var(--panel);
+         border-top:1px solid var(--line); padding:8px 12px calc(8px + env(safe-area-inset-bottom));
+         font-size:14px; }
+:root[data-layout="small"] footer .legend { display:none; }
+:root[data-layout="small"] footer .corner { opacity:1; width:100%; justify-content:flex-end; }
+:root[data-layout="small"] footer .corner a, :root[data-layout="small"] footer .corner button { padding:8px 14px; }
+:root[data-layout="small"] #fullBtn { display:none; }
 [hidden] { display:none !important; }
 </style>
 <script>
@@ -86,6 +139,19 @@ body.asleep { cursor:none; }
   if (!theme) { try { theme = localStorage.getItem("tda.board.theme"); } catch (e) {} }
   document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
 })();
+// The layout: ?layout=mobile / desktop, else the viewer's choice (the button
+// on the lower edge), else the width of the screen. Set before the page is
+// drawn, so it never flashes the other one.
+const autoLayout = () => matchMedia("(max-width: 760px)").matches ? "small" : "big";
+function chosenLayout() {
+  const asked = new URLSearchParams(location.search).get("layout");
+  if (asked === "mobile") return "small";
+  if (asked === "desktop") return "big";
+  let stored = null;
+  try { stored = localStorage.getItem("tda.board.layout"); } catch (e) {}
+  return stored === "small" || stored === "big" ? stored : autoLayout();
+}
+document.documentElement.dataset.layout = chosenLayout();
 </script>
 </head>
 <body>
@@ -146,11 +212,29 @@ body.asleep { cursor:none; }
   <div class="corner">
     <a id="xlsxLink" href="#" hidden>excel</a>
     <a id="pdfLink" href="#" hidden>pdf</a>
-    <button type="button" id="themeBtn" class="theme" aria-label="switch light / dark">☾</button>
+    <button type="button" id="layoutBtn" aria-label="switch mobile / desktop layout">▯ mobile</button>
+    <button type="button" id="themeBtn" class="theme" aria-label="switch light / dark">☾ dark</button>
     <button type="button" id="fullBtn">full screen</button>
   </div>
 </footer>
 
+</div>
+
+<div class="offline" id="offline" hidden>
+  <svg viewBox="0 0 40 40" aria-hidden="true">
+    <circle cx="20" cy="20" r="19.5" fill="#fff"/>
+    <circle cx="20" cy="20" r="18.2" fill="#1f3a93"/>
+    <circle cx="20" cy="20" r="15.8" fill="none" stroke="#fff" stroke-width="1.1"/>
+    <g fill="#fff">
+      <use href="#gull" transform="translate(20.5 12.5) scale(0.30)"/>
+      <use href="#gull" transform="translate(20 20.3) scale(0.34)"/>
+      <use href="#gull" transform="translate(20 28) scale(0.34)"/>
+    </g>
+  </svg>
+  <div class="name">Precision Touchdown Analyzer</div>
+  <div class="state"><i></i>not active</div>
+  <div class="note">The results appear here again as soon as the analyzer is running.
+    <span id="offlineSeen"></span></div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -161,13 +245,26 @@ let session = params.get("session") || "";
 let rules = null;
 let landings = [];
 let lastOk = 0;
+let failures = 0;
+const OFFLINE_AFTER = 2;  // refreshes in a row without an answer
 let page = { results: 0, pending: 0 };
 
 function escapeHtml(t) { const d = document.createElement("div"); d.textContent = t ?? ""; return d.innerHTML; }
-async function api(path) {
+async function api(path, { fresh = false } = {}) {
   const r = await fetch(path, { cache: "no-store" });
   if (!r.ok) throw new Error(r.statusText);
+  if (fresh && tooOld(r)) throw new Error("analyzer not pushing");
   return r.json();
+}
+// Through the relay, the board is a file the analyzer pushes every few
+// seconds; one that has not been renewed for a while means the analyzer has
+// stopped. Both times are the relay's own clock. The analyzer's answers
+// carry no Last-Modified and are never too old.
+const PUSHED_STALE_MS = 30000;
+function tooOld(r) {
+  const pushed = Date.parse(r.headers.get("Last-Modified") || "");
+  const now = Date.parse(r.headers.get("Date") || "");
+  return pushed > 0 && now > 0 && now - pushed > PUSHED_STALE_MS;
 }
 const fmtPoints = v => v.toFixed(rules ? rules.decimals : 0);
 const time = utc => utc ? new Date(utc).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "";
@@ -248,10 +345,13 @@ function fit(box, tbody) {
   }
   return Math.max(1, n);
 }
+// the mobile layout scrolls through everything instead of turning pages
+const isSmall = () => document.documentElement.dataset.layout === "small";
 function paint(key, items, render, box, tbody, pagesEl, emptyEl) {
   if (emptyEl) emptyEl.hidden = items.length > 0;
   if (!items.length) { tbody.innerHTML = ""; pagesEl.textContent = ""; return; }
   tbody.innerHTML = items.map((l, i) => render(l, i)).join("");
+  if (isSmall()) { pagesEl.textContent = ""; return; }
   const per = fit(box, tbody);
   const pages = Math.max(1, Math.ceil(items.length / per));
   page[key] = page[key] % pages;
@@ -268,26 +368,48 @@ function render() {
   paint("pending", pending, pendingRow, $("pendingBox"), $("pending"), $("pendingPages"), $("pendingEmpty"));
 }
 
+// Opened as anything but /board - /public here, or the site's root on the
+// relay to the internet - the board asks only the slim public endpoint, and
+// offers the ranking as a PDF only.
+const PUBLIC = location.pathname.replace(/\/+$/, "") !== "/board";
+
 async function refresh() {
   try {
-    if (!params.get("session")) {
-      // follow the newest session - the board just stays on for the day
-      const names = await api("/api/landings");
-      session = names[0] || "";
+    if (PUBLIC) {
+      const asked = params.get("session");
+      // a given day is final; only the newest one says whether the analyzer runs
+      const board = await api("/api/public/board" + (asked ? `?session=${encodeURIComponent(asked)}` : ""), { fresh: !asked });
+      session = board.session;
+      rules = board.rules;
+      landings = board.landings;
+    } else {
+      if (!params.get("session")) {
+        // follow the newest session - the board just stays on for the day
+        const names = await api("/api/landings");
+        session = names[0] || "";
+      }
+      rules = await api("/api/scoring");
+      landings = session ? (await api(`/api/landings/${encodeURIComponent(session)}`)).landings : [];
     }
-    rules = await api("/api/scoring");
-    landings = session ? (await api(`/api/landings/${encodeURIComponent(session)}`)).landings : [];
     lastOk = Date.now();
     $("title").textContent = session ? sessionTitle(session) : "Live Ranking";
     // the same ranking as a file, kept up to date by the server
     for (const [id, ext] of [["xlsxLink", "xlsx"], ["pdfLink", "pdf"]]) {
-      $(id).href = session ? `/api/landings/${encodeURIComponent(session)}/ranking.${ext}` : "#";
-      $(id).hidden = !session;
+      $(id).href = !session ? "#"
+        : PUBLIC ? `/api/public/ranking.pdf?session=${encodeURIComponent(session)}`
+        : `/api/landings/${encodeURIComponent(session)}/ranking.${ext}`;
+      $(id).hidden = !session || (PUBLIC && ext === "xlsx");
     }
     $("rules").textContent = rules ? `${rules.name || "scoring"} · ${rules.max_points} pts on the line` : "";
+    failures = 0;
   } catch (e) {
     // keep showing what we had; the dot goes red below
+    failures++;
   }
+  // the analyzer is not running: after a couple of misses (not a single
+  // hiccup) the whole screen says so, and it goes as soon as data comes back
+  $("offline").hidden = failures < OFFLINE_AFTER;
+  $("offlineSeen").textContent = lastOk ? `Last results received at ${new Date(lastOk).toLocaleTimeString([], { hour12: false })}.` : "";
   const stale = Date.now() - lastOk > 3 * REFRESH_MS;
   $("live").classList.toggle("stale", stale);
   $("liveText").textContent = lastOk ? (stale ? "connection lost - showing last results" : "live · " + new Date(lastOk).toLocaleTimeString([], { hour12: false })) : "connecting…";
@@ -308,10 +430,11 @@ function wake() {
 }
 document.addEventListener("mousemove", wake);
 document.addEventListener("keydown", wake);
-// the same sun / moon as the other pages
+document.addEventListener("pointerdown", wake);  // a touch screen has no mouse to move
+// the same sun / moon as the other pages, saying what it switches to
 function paintTheme() {
   const dark = document.documentElement.dataset.theme === "dark";
-  $("themeBtn").textContent = dark ? "☀" : "☾";
+  $("themeBtn").textContent = dark ? "☀ light" : "☾ dark";
   $("themeBtn").title = dark ? "Switch to the white design" : "Switch to the black design";
 }
 paintTheme();
@@ -324,7 +447,35 @@ $("themeBtn").addEventListener("click", () => {
 $("fullBtn").addEventListener("click", () => {
   if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
 });
-window.addEventListener("resize", render);
+// mobile <-> desktop, saying what it switches to; a choice that matches what
+// the screen's width would pick anyway is forgotten again (back to automatic)
+function paintLayout() {
+  const small = isSmall();
+  $("layoutBtn").textContent = small ? "▭ desktop" : "▯ mobile";
+  $("layoutBtn").title = small ? "Show the big-screen layout" : "Show the layout for small displays";
+}
+paintLayout();
+$("layoutBtn").addEventListener("click", () => {
+  const next = isSmall() ? "big" : "small";
+  try {
+    if (next === autoLayout()) localStorage.removeItem("tda.board.layout");
+    else localStorage.setItem("tda.board.layout", next);
+  } catch (e) {}
+  // a ?layout= in the address would win over the choice: drop it
+  if (params.has("layout")) {
+    params.delete("layout");
+    history.replaceState(null, "", location.pathname + (params.toString() ? "?" + params : ""));
+  }
+  document.documentElement.dataset.layout = next;
+  paintLayout();
+  render();
+  window.scrollTo(0, 0);
+});
+window.addEventListener("resize", () => {
+  document.documentElement.dataset.layout = chosenLayout();
+  paintLayout();
+  render();
+});
 
 refresh();
 setInterval(refresh, REFRESH_MS);

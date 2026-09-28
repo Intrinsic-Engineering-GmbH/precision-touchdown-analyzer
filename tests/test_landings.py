@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import http.server
 import json
+import os
+import socket
+import threading
+import time
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +21,7 @@ from touchdown_analyzer.capture import ffmpeg as ff
 from touchdown_analyzer.capture import segments as segments_mod
 from touchdown_analyzer.clips import cutter
 from touchdown_analyzer.control.app import create_app
+from touchdown_analyzer.control.relay import RelayPusher
 from touchdown_analyzer.control.review import ReviewService
 from touchdown_analyzer.control.service import CaptureService
 from touchdown_analyzer.identify import ogn
@@ -319,7 +328,7 @@ def test_airfield_fetch_uses_todays_flightbook_page(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ReviewService:
     monkeypatch.setattr(ff, "find_tool", lambda name, override=None: name)
     capture = CaptureService(tmp_path / "raw", config_dir=tmp_path / "config")
     review = ReviewService(capture, out_root=tmp_path / "landings")
@@ -329,7 +338,12 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     clip.write_bytes(b"mp4")
     store.add(landing(clip_path=str(clip)))
     store.add(landing(id="L0002", kind="pass", outcome=store_mod.ON_GROUND, longitudinal_m=None))
-    return TestClient(create_app(capture, review))
+    return review
+
+
+@pytest.fixture
+def client(review: ReviewService) -> TestClient:
+    return TestClient(create_app(review.capture, review))
 
 
 def test_listing_counts_only_landings_as_pending(client: TestClient) -> None:
@@ -531,7 +545,12 @@ def _set_pass(
             for point in entry["track"]:
                 if ruler is None or not ruler[0] <= point["frame"] <= ruler[1]:
                     point["world_x"] = 30.0  # beyond the 19.4 m window
+    before = path.stat().st_mtime_ns
     path.write_text(json.dumps(payload), encoding="utf-8")
+    # The store notices a rewrite by its time; Windows can give two writes a
+    # few milliseconds apart the same one.
+    later = max(path.stat().st_mtime_ns, before + 1_000_000)
+    os.utime(path, ns=(later, later))
 
 
 def test_frame_bar_spans_the_wheel_over_the_ruler_across_segments(
@@ -811,6 +830,166 @@ def test_board_page_is_served(client: TestClient) -> None:
     # the board reads what the judge's page reads: the landings with a score
     first = client.get("/api/landings/2026-09-13").json()["landings"][0]
     assert {"status", "kind", "score", "label", "scored_longitudinal_m"} <= set(first)
+
+
+def test_public_board_shows_only_what_the_board_draws(client: TestClient) -> None:
+    from touchdown_analyzer.control.review import PUBLIC_LANDING_FIELDS
+
+    r = client.get("/public")
+    assert r.status_code == 200 and "Results board" in r.text
+    board = client.get("/api/public/board").json()
+    # the newest session, the rules the board needs, the landings - nothing else
+    assert board["session"] == "2026-09-13"
+    assert set(board["rules"]) == {"name", "max_points", "decimals"}
+    # the rolling aircraft (a pass) is not on the board
+    assert [x["id"] for x in board["landings"]] == ["L0001"]
+    only = board["landings"][0]
+    assert set(only) == set(PUBLIC_LANDING_FIELDS)
+    assert only["score"] == 90 and only["label"] == "-1.9 m"
+    # no tracks, file paths or notes
+    text = r.text + client.get("/api/public/board").text
+    assert "track" not in board["landings"][0] and "clip_path" not in text
+    # a session is looked up, never joined onto a path
+    assert client.get("/api/public/board", params={"session": "2026-09-13"}).status_code == 200
+    for bad in ("2099-01-01", "..", "../raw", "2026-09-13/../x"):
+        assert client.get("/api/public/board", params={"session": bad}).status_code == 404
+        assert client.get("/api/public/ranking.pdf", params={"session": bad}).status_code == 404
+    pdf = client.get("/api/public/ranking.pdf")
+    assert pdf.status_code == 200 and pdf.headers["content-type"] == "application/pdf"
+
+
+def test_public_board_before_any_results(tmp_path: Path) -> None:
+    capture = CaptureService(tmp_path / "raw", config_dir=tmp_path / "config")
+    review = ReviewService(capture, out_root=tmp_path / "landings")
+    empty = TestClient(create_app(capture, review))
+    assert empty.get("/api/public/board").json()["landings"] == []
+    assert empty.get("/api/public/ranking.pdf").status_code == 404
+
+
+class _Relay(http.server.BaseHTTPRequestHandler):
+    """The relay's push port, as nginx runs it: PUT / DELETE with the token."""
+
+    files: dict[str, bytes]
+    seen: list[tuple[str, str]]
+
+    def _allowed(self) -> bool:
+        if self.headers.get("Authorization") == "Bearer secret":
+            return True
+        self.send_response(401)
+        self.end_headers()
+        return False
+
+    def do_PUT(self) -> None:  # noqa: N802 - http.server's naming
+        if self._allowed():
+            self.seen.append(("PUT", self.path))
+            self.files[self.path] = self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(201)
+            self.end_headers()
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        if self._allowed():
+            self.seen.append(("DELETE", self.path))
+            self.send_response(204 if self.files.pop(self.path, None) is not None else 404)
+            self.end_headers()
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def relay_server() -> Iterator[tuple[str, dict[str, bytes], list[tuple[str, str]]]]:
+    files: dict[str, bytes] = {}
+    seen: list[tuple[str, str]] = []
+    handler = type("Relay", (_Relay,), {"files": files, "seen": seen})
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", files, seen
+    server.shutdown()
+    server.server_close()
+
+
+def test_public_board_is_pushed_to_the_relay(review: ReviewService, relay_server: Any) -> None:
+    url, files, seen = relay_server
+    pusher = RelayPusher(review, url + "/", "secret")
+    asyncio.run(pusher.push_once())
+    assert pusher.status()["ok"], pusher.error
+    # the first push: everything the public board needs
+    assert set(files) == {
+        "/board.json",
+        "/index.html",
+        "/sessions/2026-09-13.json",
+        "/pdf/2026-09-13.pdf",
+        "/ranking.pdf",
+    }
+    public = TestClient(create_app(review.capture, review)).get("/api/public/board").json()
+    assert json.loads(files["/board.json"]) == public
+    assert json.loads(files["/sessions/2026-09-13.json"]) == public
+    assert b"Results board" in files["/index.html"]
+    assert files["/ranking.pdf"].startswith(b"%PDF")
+    assert files["/ranking.pdf"] == files["/pdf/2026-09-13.pdf"]
+    # then the board alone, changed or not: that it keeps coming says the
+    # analyzer runs
+    seen.clear()
+    asyncio.run(pusher.push_once())
+    assert seen == [("PUT", "/board.json")]
+    # a change of the judge's goes with the next push, the PDF with it
+    seen.clear()
+    review.confirm("2026-09-13", "L0001", registration="HB-3213", pilot="Anna")
+    asyncio.run(pusher.push_once())
+    assert {path for _, path in seen} == {
+        "/board.json",
+        "/sessions/2026-09-13.json",
+        "/pdf/2026-09-13.pdf",
+        "/ranking.pdf",
+    }
+    assert json.loads(files["/board.json"])["landings"][0]["pilot"] == "Anna"
+    # a session deleted on the judge PC goes from the relay with the next full push
+    files["/sessions/2026-09-01.json"] = b"{}"
+    pusher._sent["sessions/2026-09-01.json"] = "x"  # noqa: SLF001 - pushed earlier
+    pusher._everything_at = float("-inf")  # noqa: SLF001
+    asyncio.run(pusher.push_once())
+    assert "/sessions/2026-09-01.json" not in files
+    assert ("DELETE", "/sessions/2026-09-01.json") in seen
+
+
+def test_relay_that_refuses_or_is_away(review: ReviewService, relay_server: Any) -> None:
+    url, files, _ = relay_server
+    wrong = RelayPusher(review, url, "guess")
+    asyncio.run(wrong.push_once())
+    assert not wrong.ok and "token" in wrong.error and not files
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    away = RelayPusher(review, f"http://127.0.0.1:{port}", "secret")
+    asyncio.run(away.push_once())
+    assert not away.ok and "not reachable" in away.error
+    # once it answers again, everything goes - it may have lost its copies
+    away.url = url
+    asyncio.run(away.push_once())
+    assert away.ok and "/index.html" in files
+
+
+def test_relay_from_env_and_in_the_status(
+    review: ReviewService, relay_server: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url, files, _ = relay_server
+    monkeypatch.delenv("RELAY_URL", raising=False)
+    monkeypatch.delenv("RELAY_TOKEN", raising=False)
+    env = tmp_path / ".env"
+    assert RelayPusher.from_env(review, env) is None
+    env.write_text(f"CAMERA_URL=rtsp://x\nRELAY_URL={url}\nRELAY_TOKEN=secret\n", encoding="utf-8")
+    pusher = RelayPusher.from_env(review, env)
+    assert pusher is not None and pusher.token == "secret"
+    pusher.every_s = 0.05
+    with TestClient(create_app(review.capture, review, pusher)) as client:
+        for _ in range(100):
+            if pusher.ok:
+                break
+            time.sleep(0.05)
+        status = client.get("/api/status").json()["relay"]
+    assert status["url"] == url and status["ok"] and status["last_push"]
+    assert "/board.json" in files
 
 
 def test_analysis_refuses_without_calibration(client: TestClient) -> None:

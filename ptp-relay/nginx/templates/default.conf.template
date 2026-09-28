@@ -1,0 +1,132 @@
+# The public scoreboard relay (see ../../README.md).
+#
+# The nginx image turns this template into /etc/nginx/conf.d/default.conf at
+# start, filling in the push token (PUSH_TOKEN in .env) below; nginx's own
+# $variables are left alone. Everything below is plain nginx.
+#
+# The analyzer on the judge PC pushes the board here and the relay serves
+# it; the relay never calls the judge PC, whose address may change. The
+# files live in /var/cache/nginx/board, in memory: a restarted relay shows
+# "not active" until the analyzer has pushed again (within a minute).
+#
+# Port 8081, the push port - the local network only (PUSH_PORT), with the
+# token (PUSH_TOKEN):
+#   PUT / DELETE  /index.html /board.json /ranking.pdf
+#                 /sessions/<day>.json /pdf/<day>.pdf
+#
+# Port 8080, the public side - read-only:
+#   /                        the scoreboard page
+#   /api/public/board        the newest session's board; ?session=<day> that day's
+#   /api/public/ranking.pdf  the ranking as a PDF; ?session=<day> likewise
+# Anything else is 404.
+#
+# The board page tells that the analyzer has stopped from the age of
+# board.json (Last-Modified against Date): the analyzer renews it every few
+# seconds while it runs.
+
+# The viewer: behind a gateway or tunnel that sets X-Forwarded-For, its first
+# entry; otherwise the connection's address.
+map $http_x_forwarded_for $viewer {
+    ""                      $binary_remote_addr;
+    "~^(?<first>[^,\s]+)"   $first;
+}
+# A board refreshes every 5 s; this leaves room for a dozen tabs per address.
+limit_req_zone $viewer zone=viewers:10m rate=5r/s;
+
+# ?session=<day> onto the pushed file. The names are those the push port
+# takes: no slash, no leading dot; any other finds nothing.
+map $arg_session $board_file {
+    ""                                          /board.json;
+    "~^(?<board_day>[A-Za-z0-9_-][A-Za-z0-9_.-]*)$"   /sessions/$board_day.json;
+    default                                     /none;
+}
+map $arg_session $pdf_file {
+    ""                                          /ranking.pdf;
+    "~^(?<pdf_day>[A-Za-z0-9_-][A-Za-z0-9_.-]*)$"     /pdf/$pdf_day.pdf;
+    default                                     /none;
+}
+map $arg_session $pdf_name {
+    "~^(?<name_day>[A-Za-z0-9_-][A-Za-z0-9_.-]*)$"    ranking-$name_day.pdf;
+    default                                     ranking.pdf;
+}
+
+# -- the public side ------------------------------------------------------------
+server {
+    listen 8080;
+    server_tokens off;
+    # redirects relative to the address the viewer used, not nginx's own port
+    absolute_redirect off;
+    root /var/cache/nginx/board;
+
+    gzip on;
+    gzip_types application/json;
+
+    limit_req zone=viewers burst=40 nodelay;
+    limit_req_status 429;
+
+    # browsers ask again each time; the files change every few seconds
+    expires epoch;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # The page, at the site's root. Before the analyzer has pushed it, the
+    # relay's own page saying "not active" (html/offline.html).
+    location = / {
+        limit_except GET { deny all; }
+        try_files /index.html =503;
+        error_page 503 /offline.html;
+    }
+
+    location = /api/public/board {
+        limit_except GET { deny all; }
+        try_files $board_file =404;
+    }
+
+    location = /api/public/ranking.pdf {
+        limit_except GET { deny all; }
+        try_files $pdf_file =404;
+        add_header Content-Disposition 'attachment; filename="$pdf_name"' always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy no-referrer always;
+    }
+
+    location = /offline.html {
+        internal;
+        root /usr/share/nginx/relay;
+        add_header Cache-Control "no-store" always;
+        add_header Retry-After 15 always;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+# -- the push port: the analyzer, with the token ------------------------------------
+server {
+    listen 8081;
+    server_tokens off;
+    root /var/cache/nginx/board;
+    # the ranking PDF of a long day; the board itself is a few kB
+    client_max_body_size 20m;
+
+    location ~ ^/(index\.html|board\.json|ranking\.pdf|sessions/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.json|pdf/[A-Za-z0-9_-][A-Za-z0-9_.-]*\.pdf)$ {
+        if ($http_authorization != "Bearer ${PUSH_TOKEN}") {
+            return 401;
+        }
+        limit_except PUT DELETE { deny all; }
+        dav_methods PUT DELETE;
+        create_full_put_path on;
+        dav_access user:rw group:r all:r;
+    }
+
+    location / {
+        return 404;
+    }
+}

@@ -25,7 +25,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from touchdown_analyzer import __version__, paths
+from touchdown_analyzer import __version__, config, paths
+from touchdown_analyzer.control import relay
 
 DEFAULT_PORT = int(os.environ.get("TOUCHDOWN_ANALYZER_PORT", "8080") or 8080)
 POLL_MS = 2000
@@ -302,9 +303,33 @@ def run() -> int:
     field_status = ttk.Label(line3, text="", style="Muted.TLabel")
     field_status.pack(side="left", padx=(10, 0))
 
+    # -- public scoreboard ----------------------------------------------------------
+    # The board goes to the relay on the Raspberry Pi (ptp-relay/README.md):
+    # the analyzer pushes, the Pi never calls in, so this PC may be anywhere
+    # on the network. Kept in .env - the token is a password - and read when
+    # the server starts.
+    env_file = home / config.ENV_FILE
+    pb = ttk.LabelFrame(outer, text="Public scoreboard (relay)", padding=10)
+    pb.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+    pb.columnconfigure(1, weight=1)
+    relay_url_var = tk.StringVar(value=config.saved_value(relay.URL_KEY, env_file) or "")
+    relay_token_var = tk.StringVar(value=config.saved_value(relay.TOKEN_KEY, env_file) or "")
+    ttk.Label(pb, text="push to", width=16).grid(row=0, column=0, sticky="w")
+    relay_url_entry = ttk.Entry(pb, textvariable=relay_url_var)
+    relay_url_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+    ttk.Label(pb, text="token").grid(row=0, column=2, padx=(0, 4))
+    relay_token_entry = ttk.Entry(pb, textvariable=relay_token_var, width=22, show="•")
+    relay_token_entry.grid(row=0, column=3)
+    ttk.Label(
+        pb,
+        text="The relay's push port, e.g. http://192.168.0.118:5054, and PUSH_TOKEN of its .env."
+        " Empty: off. Used when the server starts.",
+        style="Muted.TLabel",
+    ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
     # -- services -------------------------------------------------------------
     svc = ttk.LabelFrame(outer, text="Services", padding=10)
-    svc.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+    svc.grid(row=6, column=0, sticky="ew", pady=(10, 0))
     svc.columnconfigure(1, weight=1)
     rows: dict[str, tuple[ttk.Label, ttk.Label]] = {}
     for i, (key, title) in enumerate(
@@ -313,6 +338,7 @@ def run() -> int:
             ("analysis", "Analysis worker"),
             ("ogn", "OGN"),
             ("calibration", "Calibration"),
+            ("relay", "Public board"),
             ("tools", "ffmpeg"),
         )
     ):
@@ -325,8 +351,8 @@ def run() -> int:
 
     # -- log --------------------------------------------------------------------
     logbox = ttk.LabelFrame(outer, text="Server log", padding=6)
-    logbox.grid(row=6, column=0, sticky="nsew", pady=(10, 0))
-    outer.rowconfigure(6, weight=1)
+    logbox.grid(row=7, column=0, sticky="nsew", pady=(10, 0))
+    outer.rowconfigure(7, weight=1)
     outer.columnconfigure(0, weight=1)
     text = tk.Text(logbox, height=12, wrap="none", font=("Consolas", 9), state="disabled")
     scroll = ttk.Scrollbar(logbox, command=text.yview)
@@ -365,7 +391,7 @@ def run() -> int:
         stop_btn.configure(state="normal" if running else "disabled")
         open_btn.configure(state="normal" if running else "disabled")
         url_label.configure(text=server.url if running else "")
-        for widget in folder_widgets:
+        for widget in [*folder_widgets, relay_url_entry, relay_token_entry]:
             widget.configure(state="disabled" if running else "normal")
 
     def read_folders() -> tuple[Path, Path] | None:
@@ -399,6 +425,12 @@ def run() -> int:
             save_folders(home, raw, results)
         except OSError as exc:
             log(f"[could not save the folders: {exc}]")
+        try:
+            for key, var in ((relay.URL_KEY, relay_url_var), (relay.TOKEN_KEY, relay_token_var)):
+                if var.get().strip() != (config.saved_value(key, env_file) or ""):
+                    config.remember_value(key, var.get(), env_file)
+        except OSError as exc:
+            log(f"[could not save the relay settings: {exc}]")
         log(f"[starting server on {host}:{port}, recordings in {raw}, results in {results}]")
         try:
             server.start(host, port, raw, results)
@@ -564,10 +596,22 @@ def run() -> int:
                 )
             elif calibration is not None:
                 fmt(*rows["calibration"], "none saved - calibrate first", None)
+            if status:
+                pushed = status.get("relay")
+                if not pushed:
+                    fmt(*rows["relay"], "off - no relay set", None)
+                elif pushed.get("ok"):
+                    when = datetime.fromisoformat(pushed["last_push"]).astimezone()
+                    fmt(*rows["relay"], f"{pushed['url']} · pushed {when:%H:%M:%S}", True)
+                elif not pushed.get("error"):
+                    fmt(*rows["relay"], f"{pushed['url']} · starting", None)
+                else:
+                    rows["relay"][0].configure(text=pushed["error"])
+                    rows["relay"][1].configure(text="failing", style="Bad.TLabel")
             if analysis is None and status is None:
                 fmt(*rows["recorder"], "server not answering yet", None)
         else:
-            for key in ("recorder", "analysis", "ogn"):
+            for key in ("recorder", "analysis", "ogn", "relay"):
                 fmt(*rows[key], "— (server stopped)", None)
         root.after(POLL_MS, poll)
 

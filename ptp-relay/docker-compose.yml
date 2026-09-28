@@ -1,0 +1,67 @@
+# The public scoreboard relay: nginx on the Raspberry Pi (or any Docker host)
+# serves the read-only scoreboard the analyzer on the judge PC pushes to it,
+# and nothing else. Setup: README.md. Settings: .env (copy .env.example).
+
+name: ptp-relay
+
+services:
+  relay:
+    image: nginx:1.27-alpine # multi-arch: runs on a Raspberry Pi (arm64 / armv7)
+    restart: unless-stopped
+    ports:
+      - "${RELAY_PORT:-5051}:8080"
+      # the push port: the local network only - the router must not forward it
+      - "${PUSH_PORT:-5054}:8081"
+    environment:
+      # what the analyzer sends along with each push
+      PUSH_TOKEN: ${PUSH_TOKEN:?set PUSH_TOKEN in .env - make one with openssl rand -hex 24}
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      # "Precision Touchdown Analyzer not active", before the first push
+      - ./nginx/html:/usr/share/nginx/relay:ro
+    tmpfs:
+      # the pushed board and nginx's temporary files: in memory, not on the
+      # SD card (uid 101 is nginx's user in the image)
+      - /var/cache/nginx:uid=101,gid=101,mode=0755,size=64m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # HTTPS in front of the relay, with the certificate from the provider's PEM
+  # file in certs/. Switched on with COMPOSE_PROFILES=https in .env; then
+  # HTTPS_PORT is the public port and RELAY_PORT only for the local network
+  # (README.md, "HTTPS").
+  https:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on: [relay]
+    ports:
+      - "${HTTPS_PORT:-5051}:443"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost} # the public name, e.g. touchdown.fahmi.ch
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro # certificate.pem: certificate, intermediate, private key
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy-data:
+  caddy-config:

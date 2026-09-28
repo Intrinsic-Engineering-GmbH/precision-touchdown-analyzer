@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not active &middot; Precision Touchdown Analyzer</title>
+<!-- Served by the relay itself when the analyzer cannot be reached and no
+     copy of the scoreboard page is at hand. It tries again every 15 s. -->
+<meta http-equiv="refresh" content="15">
+<style>
+:root { color-scheme: dark; --bg:#0d1117; --ink:#eef1f5; --muted:#8b96a5; --fail:#f26d68; --u: 1vh; }
+@media (prefers-color-scheme: light) {
+  :root { color-scheme: light; --bg:#f4f5f7; --ink:#14181f; --muted:#5d6672; --fail:#b3261e; }
+}
+html, body { height:100%; margin:0; }
+body { background:var(--bg); color:var(--ink); display:flex; flex-direction:column; align-items:center;
+       justify-content:center; gap:calc(2 * var(--u)); text-align:center; padding:0 16px; box-sizing:border-box;
+       font-family:system-ui,-apple-system,"Segoe UI",sans-serif; }
+svg { width:max(96px, calc(16 * var(--u))); height:max(96px, calc(16 * var(--u))); }
+.name { font-size:max(14px, calc(2.6 * var(--u))); font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+.state { font-size:max(34px, calc(7 * var(--u))); font-weight:800; line-height:1.1; }
+.state i { display:inline-block; width:.35em; height:.35em; border-radius:50%; background:var(--fail); vertical-align:middle; margin-right:.35em; }
+.note { font-size:max(15px, calc(2.4 * var(--u))); color:var(--muted); max-width:46em; }
+</style>
+</head>
+<body>
+  <svg viewBox="0 0 40 40" aria-hidden="true">
+    <defs><path id="gull" d="M -36 2 C -26 -9 -13 -11 -4 -4 C -2 -3 2 -3 4 -4 C 13 -11 26 -9 36 2 C 26 -3 14 -1 6 3 C 4.5 7 0 9.5 -3.5 8.5 C -6 7.5 -6 4.5 -6 3 C -14 -1 -26 -3 -36 2 Z"/></defs>
+    <circle cx="20" cy="20" r="19.5" fill="#fff"/>
+    <circle cx="20" cy="20" r="18.2" fill="#1f3a93"/>
+    <circle cx="20" cy="20" r="15.8" fill="none" stroke="#fff" stroke-width="1.1"/>
+    <g fill="#fff">
+      <use href="#gull" transform="translate(20.5 12.5) scale(0.30)"/>
+      <use href="#gull" transform="translate(20 20.3) scale(0.34)"/>
+      <use href="#gull" transform="translate(20 28) scale(0.34)"/>
+    </g>
+  </svg>
+  <div class="name">Precision Touchdown Analyzer</div>
+  <div class="state"><i></i>not active</div>
+  <div class="note">The results appear here again as soon as the analyzer is running.</div>
+</body>
+</html>
