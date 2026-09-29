@@ -48,7 +48,7 @@ LOGBOOK_URL = "https://ktrax.kisstech.ch/backend/logbook"
 POLL_S = 5.0
 # A fix counts for a landing if it is within this many seconds of the
 # touchdown, this close to the target line, and this low above field level.
-MATCH_WINDOW_S = 90.0
+MATCH_WINDOW_S = 30.0
 MATCH_RADIUS_M = 1500.0
 MATCH_MAX_AGL_M = 150.0
 LOGBOOK_WINDOW_S = 240.0

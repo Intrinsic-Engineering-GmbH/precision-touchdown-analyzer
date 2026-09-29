@@ -203,7 +203,7 @@ indefinitely. The disk guard stops recording below 20 GB free.
 
 1. **OGN live positions** (`live.glidernet.org`), polled every 5 s during a
    session into `ogn_fixes.jsonl`. A landing matches the aircraft whose fix is
-   within 90 s of the touchdown, within 1.5 km of the target line and below
+   within 30 s of the touchdown, within 1.5 km of the target line and below
    150 m AGL.
 2. **OGN FlightBook** logbook (`flightbook.glidernet.org`, KTrax as fallback),
    fetched on demand for the day: registration, type, and the landing/take-off
