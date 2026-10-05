@@ -12,7 +12,7 @@ the ground plane through a one-time calibration. A judge confirms each landing
 in the browser.
 
 <p align="center">
-  <img width="1427" height="1165" alt="The judge's Landings page: the contact frame of a glider with the target line and the approach drawn in, the measured offset, lateral distance and ground speed, the OGN identification with registration and pilot to confirm, and the session's events with offset, points and status" src="https://github.com/user-attachments/assets/3756b6af-1bf5-4ca8-941b-10ab724513a6" />
+<img width="1426" height="1893" alt="image" src="https://github.com/user-attachments/assets/d2d79135-9a25-40b0-90c9-2e34ad5e9da9" />
   <br><em>The judge's Landings page: the contact frame with the geometry drawn in, the measurement, the OGN proposal to confirm, and every event of the session.</em>
 </p>
 
