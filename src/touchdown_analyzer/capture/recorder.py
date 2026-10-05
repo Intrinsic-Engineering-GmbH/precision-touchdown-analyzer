@@ -130,19 +130,42 @@ def write_manifest(cfg: RecorderConfig, stream: ff.StreamInfo | None) -> Path:
         "stream": None,
     }
     if stream is not None:
-        manifest["stream"] = {
-            "width": stream.width,
-            "height": stream.height,
-            "codec": stream.codec,
-            "pix_fmt": stream.pix_fmt,
-            "nominal_fps": stream.nominal_fps,
-            "avg_fps": stream.avg_fps,
-            "bit_rate_bps": stream.bit_rate_bps,
-        }
+        manifest["stream"] = _stream_dict(stream)
 
     path = cfg.session_dir / MANIFEST_NAME
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def _stream_dict(stream: ff.StreamInfo) -> dict:
+    return {
+        "width": stream.width,
+        "height": stream.height,
+        "codec": stream.codec,
+        "pix_fmt": stream.pix_fmt,
+        "nominal_fps": stream.nominal_fps,
+        "avg_fps": stream.avg_fps,
+        "bit_rate_bps": stream.bit_rate_bps,
+    }
+
+
+def update_manifest_stream(path: Path, stream: ff.StreamInfo) -> None:
+    """Fill in the stream properties of a manifest written without them."""
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    manifest["stream"] = _stream_dict(stream)
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def _first_closed_segment(session_dir: Path, existing: set[Path]) -> Path | None:
+    """The first segment of this run that ffmpeg has finished writing.
+
+    A segment is closed once the next one has been opened.
+    """
+    fresh = sorted(p for p in session_dir.glob("*.mp4") if p not in existing)
+    return fresh[0] if len(fresh) >= 2 else None
 
 
 def free_gb(path: Path) -> float:
@@ -238,11 +261,19 @@ def record(
     backoff = cfg.initial_backoff_s
 
     try:
+        # A live camera is not probed before recording: that costs a second
+        # RTSP session and, on a slow or waking link, up to the probe timeout
+        # of footage. The stream properties are read from the first segment
+        # on disk instead, once ffmpeg has closed it.
         stream: ff.StreamInfo | None = None
-        try:
-            stream = ff.probe_stream(cfg.source, cfg.ffprobe, rtsp_transport=cfg.rtsp_transport)
-        except ff.ProbeError as exc:
-            log.warning("could not probe source before recording: %s", exc)
+        live = is_network_source(cfg.source)
+        if not live:
+            try:
+                stream = ff.probe_stream(cfg.source, cfg.ffprobe)
+            except ff.ProbeError as exc:
+                log.warning("could not probe source before recording: %s", exc)
+        existing = set(cfg.session_dir.glob("*.mp4"))
+        stream_pending = live
 
         manifest = write_manifest(cfg, stream)
         log.info("session manifest written to %s", manifest)
@@ -292,6 +323,16 @@ def record(
                     if down_since is not None and progress.frames > 0:
                         _record_gap(down_since, stats, gaps_path)
                         down_since = None
+
+                    if stream_pending:
+                        segment = _first_closed_segment(cfg.session_dir, existing)
+                        if segment is not None:
+                            stream_pending = False
+                            try:
+                                info = ff.probe_stream(str(segment), cfg.ffprobe, timeout=15.0)
+                                update_manifest_stream(manifest, info)
+                            except ff.ProbeError as exc:
+                                log.warning("could not probe %s: %s", segment.name, exc)
 
                     if stop.wait(1.0):
                         _graceful_stop(proc)

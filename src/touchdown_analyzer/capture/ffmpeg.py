@@ -185,7 +185,10 @@ def probe_stream(
     """Read the video stream properties of a file or live source."""
     args: list[str] = []
     if source.startswith(("rtsp://", "rtsps://")):
-        args += ["-rtsp_transport", rtsp_transport]
+        # Without a socket timeout a camera that accepts the connection but
+        # never answers holds ffprobe until it is killed, which in turn leaves
+        # the RTSP session open on the camera.
+        args += ["-rtsp_transport", rtsp_transport, socket_timeout_flag(ffprobe), "5000000"]
     args += ["-show_streams", "-show_format", "-select_streams", "v:0", "-i", source]
 
     data = _run_ffprobe(ffprobe, args, timeout)

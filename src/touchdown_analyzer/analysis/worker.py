@@ -4,12 +4,15 @@ One thread per session: it watches the session directory, indexes every
 segment the recorder has finished, feeds them to an :class:`Analyzer` in
 order and stores each landing as it falls out. It only ever *reads* the raw
 segments, so nothing here can cost the recorder a frame (docs/design.md 1).
-The same loop, with ``follow=False``, re-processes a finished session.
+The same loop, with ``follow=False``, analyses a finished session - only the
+segments no earlier run has finished (``analysed.json``), unless ``fresh``.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -30,8 +33,29 @@ log = logging.getLogger(__name__)
 POLL_S = 2.0
 SETTLE_S = 3.0
 
+# The segments already analysed, next to the session's landings.json: a run
+# picks up where the last one ended instead of starting the day over.
+ANALYSED_NAME = "analysed.json"
+
 RecordingFn = Callable[[str], bool]
 IdentifyFn = Callable[[Landing], None]
+
+
+def load_analysed(path: Path) -> set[str]:
+    """The segment names a previous run finished; empty if there is none."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    return {str(name) for name in payload.get("segments", [])}
+
+
+def save_analysed(path: Path, names: set[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"written_utc": datetime.now(UTC).isoformat(), "segments": sorted(names)}
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 class AnalysisWorker:
@@ -139,8 +163,10 @@ class AnalysisWorker:
     def _run(self, session: str, calibration: hg.Calibration, fresh: bool) -> None:
         session_dir = self.root / session
         store = self.store_for(session)
+        analysed_path = self.out_root / session / ANALYSED_NAME
         if fresh:
             store.clear()
+            analysed_path.unlink(missing_ok=True)
         analyzer = pipeline.Analyzer(
             session,
             calibration,
@@ -155,7 +181,7 @@ class AnalysisWorker:
                 known[seg.name] = seg
         except FileNotFoundError:
             pass
-        processed: set[str] = set()
+        processed = load_analysed(analysed_path)
 
         def progress(name: str, frame: int, total: int) -> None:
             self.segment, self.frame, self.total = name, frame, total
@@ -207,7 +233,10 @@ class AnalysisWorker:
                     except Exception as exc:  # noqa: BLE001 - one bad file must not end the day
                         log.exception("analysis of %s failed", seg.name)
                         self.error = f"{seg.name}: {exc}"
+                    if self._stop.is_set():
+                        break  # stopped part-way: this segment is not done
                     processed.add(seg.name)
+                    save_analysed(analysed_path, processed)
                     self.done.append(seg.name)
                     self.queue = [s.name for s in todo if s.name not in processed]
             analyzer.finish(on_landing=found)

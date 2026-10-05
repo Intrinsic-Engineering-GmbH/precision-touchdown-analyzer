@@ -394,11 +394,9 @@ class ReviewService:
                 landing.image_x, landing.image_y = image_x, image_y
                 detail["clicked"] = True
             else:
-                if segment != contact:
-                    raise ServiceError(
-                        "no wheel position in that segment: click the wheel's contact point"
-                    )
-                point = self._track_point(landing, frame, exact=True)
+                # The track runs on across a segment boundary: a frame just
+                # after it has a tracked wheel too.
+                point = self._track_point(landing, frame, exact=True, segment=segment)
                 landing.confirmed_longitudinal_m = landing.direction * point.world_x
                 landing.image_x, landing.image_y = point.u, point.v
             landing.confirmed_frame = frame
@@ -482,8 +480,10 @@ class ReviewService:
             log.warning("could not rewrite overlay for %s: %s", landing.id, exc)
 
     @staticmethod
-    def _track_point(landing: Landing, frame: int, *, exact: bool = False) -> store_mod.TrackPoint:
-        """The wheel position at ``frame`` of the contact segment.
+    def _track_point(
+        landing: Landing, frame: int, *, exact: bool = False, segment: str | None = None
+    ) -> store_mod.TrackPoint:
+        """The wheel position at ``frame`` of ``segment`` (the contact segment).
 
         ``exact`` is for the judge's pick: the frame bar reaches frames the
         tracker never saw, and scoring the nearest tracked one instead would
@@ -491,7 +491,7 @@ class ReviewService:
         """
         if not landing.track:
             raise ServiceError("this landing has no track to pick a frame from")
-        segment = landing.segment or landing.track[0].segment
+        segment = segment or landing.segment or landing.track[0].segment
         same = [p for p in landing.track if p.segment == segment]
         if exact:
             found = next((p for p in same if p.frame == frame), None)

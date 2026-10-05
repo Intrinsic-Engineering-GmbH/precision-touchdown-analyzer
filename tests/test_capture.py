@@ -112,6 +112,44 @@ def test_manifest_records_offset_and_hides_credentials(tmp_path: Path) -> None:
     assert manifest["session"] == "2026-07-18"
 
 
+def test_manifest_stream_is_filled_in_later(tmp_path: Path) -> None:
+    cfg = RecorderConfig(source="rtsp://cam/stream", session="2026-07-18", root=tmp_path)
+    cfg.session_dir.mkdir(parents=True)
+    path = recorder.write_manifest(cfg, None)
+    info = ff.StreamInfo(1920, 1080, "h264", "yuv420p", 60.0, 59.94, None, 10.0, 600, {})
+    recorder.update_manifest_stream(path, info)
+
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    assert manifest["stream"]["width"] == 1920
+    assert manifest["stream"]["avg_fps"] == 59.94
+    assert manifest["session"] == "2026-07-18"
+
+
+def test_first_closed_segment_waits_for_the_next_one(tmp_path: Path) -> None:
+    old = tmp_path / "2026-07-18_10-00-00.mp4"
+    old.touch()
+    existing = {old}
+    first = tmp_path / "2026-07-18_11-00-00.mp4"
+    first.touch()
+    assert recorder._first_closed_segment(tmp_path, existing) is None  # still being written
+    (tmp_path / "2026-07-18_11-00-10.mp4").touch()
+    assert recorder._first_closed_segment(tmp_path, existing) == first
+
+
+def test_live_probe_has_a_socket_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stalled camera must fail ffprobe quickly, not hold it until killed."""
+    seen: list[list[str]] = []
+
+    def fake(ffprobe: str, args: list[str], timeout: float) -> dict:
+        seen.append(args)
+        return {"streams": [{"width": 1920, "height": 1080}]}
+
+    monkeypatch.setattr(ff, "_run_ffprobe", fake)
+    monkeypatch.setattr(ff, "major_version", lambda _: 9)
+    ff.probe_stream("rtsp://cam/stream", "ffprobe")
+    assert seen[0][seen[0].index("-timeout") + 1] == "5000000"
+
+
 # --------------------------------------------------------------------------
 # segment index
 # --------------------------------------------------------------------------

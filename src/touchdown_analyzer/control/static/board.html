@@ -273,8 +273,23 @@ const sessionTitle = s => {
   return isNaN(d) ? s : d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 };
 
+// Equal points: metres from the line, closest first, compared landing by
+// landing (best against best, then the next, as far as both have landings);
+// a landing outside the window counts as the farthest. Mirrors ranking._order.
+function distances(ls) {
+  return ls.map(l => l.outcome === "measured" && l.scored_longitudinal_m != null
+    ? Math.abs(l.scored_longitudinal_m) : Infinity).sort((a, b) => a - b);
+}
+function compareDistances(a, b) {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  }
+  return 0;  // as near as far as both go: more landings decides next
+}
+
 // Each pilot's confirmed landings added up or averaged (the rules say which),
-// best result first; the mean is rounded like a score, so equal numbers tie. The unverified
+// best result first, equal points by distance from the line; the mean is
+// rounded like a score, so equal numbers tie. The unverified
 // landings one by one in order of touchdown. The pilot is what the judge
 // typed; a landing without one falls back to the aircraft, and one without
 // either stands alone.
@@ -299,7 +314,10 @@ function split() {
     const sum = g.landings.reduce((s, l) => s + (l.score ?? 0), 0);
     g.total = mean ? Number((sum / g.landings.length).toFixed(places)) : sum;
   }
-  const ranked = [...groups.values()].sort((a, b) => b.total - a.total || b.landings.length - a.landings.length || a.name.localeCompare(b.name));
+  for (const g of groups.values()) g.distances = distances(g.landings);
+  const ranked = [...groups.values()].sort((a, b) =>
+    b.total - a.total || compareDistances(a.distances, b.distances) ||
+    b.landings.length - a.landings.length || a.name.localeCompare(b.name));
   const pending = shown.filter(l => l.status !== "confirmed").sort(byTime);
   return { ranked, pending };
 }

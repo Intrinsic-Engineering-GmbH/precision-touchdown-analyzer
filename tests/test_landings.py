@@ -532,6 +532,42 @@ def test_a_clicked_frame_in_the_next_segment_is_kept_with_its_segment(
     assert body["confirmed_segment"] is None and body["confirmed_frame"] is None
 
 
+def test_a_tracked_frame_in_the_next_segment_needs_no_click(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """The track runs on across the boundary: its frames there are scored as tracked."""
+    session_dir = tmp_path / "raw" / "2026-09-13"
+    session_dir.mkdir(parents=True)
+    segments_mod.write_index(
+        session_dir,
+        [
+            segments_mod.Segment("s.mp4", "2026-09-13T11:58:30+00:00", 10.0, 600, 60.0, 1),
+            segments_mod.Segment("t.mp4", "2026-09-13T11:58:40+00:00", 10.0, 600, 60.0, 1),
+        ],
+    )
+    path = tmp_path / "landings" / "2026-09-13" / "landings.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for entry in payload["landings"]:
+        if entry["id"] == "L0001":
+            entry["track"].append(
+                {**entry["track"][-1], "segment": "t.mp4", "frame": 5, "world_x": 1.25}
+            )
+    before = path.stat().st_mtime_ns
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    later = max(path.stat().st_mtime_ns, before + 1_000_000)
+    os.utime(path, ns=(later, later))
+
+    r = client.post("/api/landings/2026-09-13/L0001/edit", json={"frame": 5, "segment": "t.mp4"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["confirmed_segment"], body["confirmed_frame"]) == ("t.mp4", 5)
+    assert body["confirmed_longitudinal_m"] == pytest.approx(1.25)
+
+    # a frame of that segment the tracker did not follow still needs the click
+    r = client.post("/api/landings/2026-09-13/L0001/edit", json={"frame": 50, "segment": "t.mp4"})
+    assert r.status_code == 409 and "no wheel position at frame 50" in r.json()["detail"]
+
+
 def _set_pass(
     tmp_path: Path, first: list | None, last: list | None, *, ruler: tuple[int, int] | None = None
 ) -> None:
@@ -797,6 +833,22 @@ def test_ranking_by_the_mean_of_each_pilots_landings() -> None:
         ("Anna", 88.3),
         ("Cla", 87.5),
     ]
+
+
+def test_equal_points_go_to_the_landing_nearer_the_line() -> None:
+    from touchdown_analyzer.store import ranking
+
+    result = ranking.rank(
+        [
+            scored(id="L0001", pilot="Anna", score=100, scored_longitudinal_m=-1.1),
+            scored(id="L0002", pilot="Beat", score=100, scored_longitudinal_m=0.7),
+            scored(id="L0003", pilot="Cla", score=0, outcome="long", scored_longitudinal_m=None),
+            scored(id="L0004", pilot="Dora", score=0, scored_longitudinal_m=-35.0),
+            scored(id="L0005", pilot="Ernst", score=0, outcome="short", scored_longitudinal_m=None),
+        ]
+    )
+    # a bound ('> +20 m') counts as farther than any measured distance
+    assert [g.name for g in result.ranked] == ["Beat", "Anna", "Dora", "Cla", "Ernst"]
 
 
 def test_ranking_mode_is_saved_and_reaches_the_files(client: TestClient) -> None:

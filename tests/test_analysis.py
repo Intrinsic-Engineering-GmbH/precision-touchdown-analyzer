@@ -355,3 +355,63 @@ def test_two_aircraft_in_view_together_stay_apart() -> None:
     glider = _track(2, range(100, 160), 0, y=600)  # on the rope, far behind and lower
     later = _track(3, range(400, 460), 0)  # the next landing, seconds after
     assert len(pipeline._group([tug, glider, later])) == 3
+
+
+def test_worker_analyses_only_segments_no_run_has_finished(tmp_path, monkeypatch) -> None:
+    """Each run after a recording picks up the new segments, not the whole day."""
+    from types import SimpleNamespace
+
+    from touchdown_analyzer.analysis import pipeline, worker
+    from touchdown_analyzer.capture import segments as segments_mod
+
+    session_dir = tmp_path / "raw" / "2026-10-03"
+    session_dir.mkdir(parents=True)
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text("{}", encoding="utf-8")
+    index: list[segments_mod.Segment] = []
+
+    def add(name: str, start: str) -> None:
+        (session_dir / name).write_bytes(b"")
+        index.append(segments_mod.Segment(name, start, 10.0, 600, 60.0, 0))
+
+    ran: list[str] = []
+
+    class FakeAnalyzer:
+        def __init__(self, *args, **kwargs) -> None:
+            self.tracker = SimpleNamespace(active=[])
+
+        def add_pieces(self, refs) -> None:
+            pass
+
+        def run_segment(self, ref, **kwargs) -> list:
+            ran.append(ref.name)
+            return []
+
+        def finish(self, **kwargs) -> list:
+            return []
+
+    monkeypatch.setattr(pipeline, "Analyzer", FakeAnalyzer)
+    monkeypatch.setattr(segments_mod, "load_index", lambda d: list(index))
+    monkeypatch.setattr(
+        worker.hg,
+        "load",
+        lambda p: SimpleNamespace(residual_m=0.1, acceptable=True, created_utc=""),
+    )
+    w = worker.AnalysisWorker(
+        tmp_path / "raw", tmp_path / "out", calibration, ffmpeg=None, ffprobe="ffprobe"
+    )
+
+    def run(fresh: bool = False) -> list[str]:
+        ran.clear()
+        w.start("2026-10-03", follow=False, fresh=fresh)
+        w.wait(10)
+        return list(ran)
+
+    add("2026-10-03_11-00-00.mp4", "2026-10-03T09:00:00+00:00")
+    add("2026-10-03_11-00-10.mp4", "2026-10-03T09:00:10+00:00")
+    assert run() == ["2026-10-03_11-00-00.mp4", "2026-10-03_11-00-10.mp4"]
+    add("2026-10-03_11-30-00.mp4", "2026-10-03T09:30:00+00:00")
+    assert run() == ["2026-10-03_11-30-00.mp4"]
+    assert run() == []
+    # from scratch: everything again
+    assert len(run(fresh=True)) == 3

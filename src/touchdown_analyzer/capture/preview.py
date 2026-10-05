@@ -31,6 +31,7 @@ JPEG_QUALITY = "6"  # -q:v; 2 is best, 31 worst
 # ffmpeg is killed once no frame has been consumed for this long.
 IDLE_TIMEOUT_S = 10.0
 FRAME_WAIT_S = 15.0
+QUIT_WAIT_S = 3.0  # for ffmpeg to tear the RTSP session down after 'q'
 
 _SOI = b"\xff\xd8"
 _EOI = b"\xff\xd9"
@@ -48,7 +49,8 @@ def build_command(
     width: int = PREVIEW_WIDTH,
     rtsp_transport: str = "tcp",
 ) -> list[str]:
-    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
+    # stdin stays open: it is how close() asks ffmpeg to quit ('q').
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error"]
     if source.startswith(("rtsp://", "rtsps://")):
         cmd += ["-rtsp_transport", rtsp_transport]
     if is_network_source(source):
@@ -81,6 +83,7 @@ class Preview:
         try:
             self._proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
@@ -142,10 +145,26 @@ class Preview:
                 self._cond.notify_all()
 
     def _stop_process(self) -> None:
-        if self._proc.poll() is None:
-            self._proc.kill()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                self._proc.wait(timeout=5)
+        """Ask ffmpeg to quit, and kill it only if it will not.
+
+        A killed ffmpeg never sends the RTSP TEARDOWN, so the camera keeps
+        the session until its own timeout; a few of those from preview
+        restarts and the camera refuses the recorder's next connection.
+        """
+        if self._proc.poll() is not None:
+            return
+        with contextlib.suppress(OSError, ValueError):
+            if self._proc.stdin and not self._proc.stdin.closed:
+                self._proc.stdin.write(b"q\n")
+                self._proc.stdin.flush()
+        try:
+            self._proc.wait(timeout=QUIT_WAIT_S)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        self._proc.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            self._proc.wait(timeout=5)
 
     # -- consumer ---------------------------------------------------------
 

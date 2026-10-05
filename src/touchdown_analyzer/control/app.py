@@ -414,8 +414,10 @@ def create_app(
         rtsp_transport: str = Query(default="tcp", pattern="^(tcp|udp)$"),
     ) -> StreamingResponse:
         try:
-            stream = service.open_preview(
-                source, fps=fps, width=width, rtsp_transport=rtsp_transport
+            # Waits up to seconds for the camera's first frame: off the event
+            # loop, or every other request (Stop included) waits with it.
+            stream = await asyncio.to_thread(
+                service.open_preview, source, fps=fps, width=width, rtsp_transport=rtsp_transport
             )
         except ServiceError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

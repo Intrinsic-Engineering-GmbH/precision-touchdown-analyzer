@@ -532,9 +532,19 @@ function startPreview() {
   const img = $("preview");
   img.onerror = async () => {
     if (!previewing) return;
-    // The <img> cannot show the server's reason; fetch it as JSON.
-    try { await api("/api/preview.mjpeg?" + params.toString()); }
-    catch (e) { showError("preview: " + e.message); }
+    // The <img> cannot show the server's reason; fetch it as JSON. If the
+    // retry gets a stream after all, drop it at once: reading it to the end
+    // would hold a camera session for as long as the page stays open.
+    const abort = new AbortController();
+    try {
+      const response = await fetch("/api/preview.mjpeg?" + params.toString(), { signal: abort.signal });
+      if (!response.ok) {
+        let payload = null;
+        try { payload = await response.json(); } catch (e) { /* empty body */ }
+        showError("preview: " + ((payload && payload.detail) || response.statusText));
+      }
+    } catch (e) { showError("preview: " + e.message); }
+    abort.abort();
     stopPreview();
   };
   img.src = "/api/preview.mjpeg?" + params.toString();

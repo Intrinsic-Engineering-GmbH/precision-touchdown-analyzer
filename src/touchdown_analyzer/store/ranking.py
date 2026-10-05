@@ -16,6 +16,8 @@ dependency.
 
 from __future__ import annotations
 
+import functools
+import math
 import os
 import zipfile
 from dataclasses import dataclass, field
@@ -56,13 +58,45 @@ def _when(landing: dict[str, Any]) -> str:
     return landing.get("touchdown_utc") or landing.get("first_utc") or ""
 
 
+def distances(landings: list[dict[str, Any]]) -> tuple[float, ...]:
+    """The tie-break on equal points: metres from the line, closest first.
+
+    Compared landing by landing, so the pilot whose best landing was nearer
+    the line goes first, then the second best decides, and so on as far as
+    both pilots have landings. A landing outside the window (only a bound)
+    counts as the farthest.
+    """
+    return tuple(
+        sorted(
+            abs(x["scored_longitudinal_m"])
+            if x.get("outcome") == "measured" and x.get("scored_longitudinal_m") is not None
+            else math.inf
+            for x in landings
+        )
+    )
+
+
+def _order(a: Group, b: Group) -> int:
+    """More points; then nearer the line; then more landings; then the name."""
+    if a.total != b.total:
+        return -1 if a.total > b.total else 1
+    for x, y in zip(distances(a.landings), distances(b.landings), strict=False):
+        if x != y:
+            return -1 if x < y else 1
+    if len(a.landings) != len(b.landings):
+        return -1 if len(a.landings) > len(b.landings) else 1
+    na, nb = a.name.casefold(), b.name.casefold()
+    return (na > nb) - (na < nb)
+
+
 def rank(landings: list[dict[str, Any]], rules: ScoringRules | None = None) -> Ranking:
     """Group and order scored landings the way the board does.
 
     Rejected entries and anything that is not a landing are left out. The
     pilot is what the judge typed; a landing without one falls back to the
     aircraft, and one without either stands alone. A group's ``total`` is
-    its landings combined as the rules say - added up, or their mean.
+    its landings combined as the rules say - added up, or their mean. Equal
+    points are separated by distance from the line (:func:`distances`).
     """
     rules = rules or ScoringRules()
     shown = [x for x in landings if x.get("kind") == "landing" and x.get("status") != "rejected"]
@@ -89,7 +123,7 @@ def rank(landings: list[dict[str, Any]], rules: ScoringRules | None = None) -> R
             group.aircraft.append(x["aircraft_type"])
     for group in groups.values():
         group.total = rules.combine([x.get("score") for x in group.landings])
-    ranked = sorted(groups.values(), key=lambda g: (-g.total, -len(g.landings), g.name.casefold()))
+    ranked = sorted(groups.values(), key=functools.cmp_to_key(_order))
     pending = sorted((x for x in shown if x.get("status") != "confirmed"), key=_when)
     return Ranking(ranked, pending)
 
